@@ -326,11 +326,11 @@ class Settings:
             log_level = logging.ERROR
         elif debug:
             log_level = logging.DEBUG
-            self.logger.setLevel(logging.DEBUG)
         elif info:
             log_level = logging.INFO
         else:
             log_level = logging.WARNING
+        logging.basicConfig(format='%(message)s', level=log_level, datefmt='%H:%M:%S')
 
         self.info = info
         self.debug = debug
