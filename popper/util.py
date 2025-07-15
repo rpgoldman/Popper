@@ -281,7 +281,7 @@ class Settings:
 
     def __init__(self, cmd_line=False, info=True, debug=False, show_stats=True, max_literals=MAX_LITERALS,
                  timeout=TIMEOUT, quiet=False, eval_timeout=EVAL_TIMEOUT, max_examples=MAX_EXAMPLES, max_body=None,
-                 max_rules=None, max_vars=None, functional_test=False, kbpath=False, ex_file=False, bk_file=False,
+                 max_rules=None, max_vars=None, functional_test=False, kbpath: Optional[str]=None, ex_file=False, bk_file=False,
                  bias_file=False, showcons=False, no_bias=False, order_space=False, noisy=False, batch_size=BATCH_SIZE,
                  solver='rc2', anytime_solver=None, anytime_timeout=ANYTIME_TIMEOUT, show_failures=False):
 
