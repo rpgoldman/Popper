@@ -38,6 +38,11 @@ program_size_at_least(M):- size(N), program_bounds(M), M <= N.
 
 
 class Generator(AbstractGenerator):
+    """
+    This generator is for the `settings.single_solve` case.
+
+
+    """
     settings: Settings
     model: Optional[clingo.Model]
     solver: clingo.Control

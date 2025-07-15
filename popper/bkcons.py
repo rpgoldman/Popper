@@ -787,11 +787,17 @@ def deduce_recalls(settings):
 
     # we now calculate the maximum recall
     all_recalls = {}
+    recall: int
     for pred, arity in settings.body_preds:
         d1 = counts[pred]
         all_recalls[(pred, (0,)*arity)] = counts_all[pred]
         for args, d2 in d1.items():
-            recall = max(len(xs) for xs in d2.values())
+            try:
+                recall = max(len(xs) for xs in d2.values())
+            except ValueError:
+                settings.logger.error(f"Failed to recall consequences of body predicate {pred}/{arity}")
+                settings.logger.error("Setting recall count to 0 and continuing")
+                recall = 0
             # print(pred, args, recall)
             all_recalls[(pred, args)] = recall
 

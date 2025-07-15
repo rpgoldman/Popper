@@ -4,21 +4,21 @@ from typing import Set, TYPE_CHECKING, List, Optional
 
 import clingo
 
-from . type_defs import Literal, RuleBase
+from .type_defs import Literal, RuleBase
 
 
 if TYPE_CHECKING:
-    from . util import Settings
+    from .util import Settings
 
 
 class Generator(abc.ABC):
-    settings: 'Settings'
+    settings: "Settings"
     solver: clingo.Control
     handle: Optional[clingo.SolveHandle]
     model: Optional[clingo.Model]
 
     @abc.abstractmethod
-    def get_prog(self) -> RuleBase:
+    def get_prog(self) -> Optional[RuleBase]:
         pass
 
     # @abc.abstractmethod
@@ -76,7 +76,7 @@ class Generator(abc.ABC):
             args = atom.arguments
             name = atom.name
 
-            if name == 'body_literal':
+            if name == "body_literal":
                 rule_index = args[0].number
                 predicate = args[1].name
                 atom_args = args[3].arguments
@@ -85,7 +85,7 @@ class Generator(abc.ABC):
                 body_literal = (predicate, atom_args, arity)
                 rule_index_to_body[rule_index].add(body_literal)
 
-            elif name == 'head_literal':
+            elif name == "head_literal":
                 rule_index = args[0].number
                 predicate = args[1].name
                 atom_args = args[3].arguments
@@ -96,11 +96,11 @@ class Generator(abc.ABC):
 
         prog = []
 
-        for rule_index in rule_index_to_head:  # pylint: ignore=C0206
+        for rule_index in rule_index_to_head:  # pylint: disable=C0206
             head_pred, head_args, _head_arity = rule_index_to_head[rule_index]
             head = Literal(head_pred, head_args)
             body: Set[Literal] = set()
-            for (body_pred, body_args, _body_arity) in rule_index_to_body[rule_index]:
+            for body_pred, body_args, _body_arity in rule_index_to_body[rule_index]:
                 body.add(Literal(body_pred, body_args))
             rule = head, frozenset(body)
             prog.append((rule))

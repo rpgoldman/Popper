@@ -259,7 +259,7 @@ class Generator(AbstractGenerator):
         return self.parse_model_recursion(atoms)
 
     def gen_symbol(self, literal, backend):
-        sign, pred, args = literal
+        _sign, pred, args = literal
         k = hash(literal)
         if k in self.seen_symbols:
             symbol = self.seen_symbols[k]

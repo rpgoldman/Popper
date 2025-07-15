@@ -90,16 +90,17 @@ class Popper():
         self.tmp = {}
         self.seen_allsat = set()
 
-    def select_generator(self, bkcons):
+    def select_generator(self, bkcons) -> Generator:
         settings = self.settings
         gen: type[Generator]
-        if settings.single_solve:
+        if settings.single_solve: # no predicate invention and no recursion
             gen = Generator2
             settings.logger.debug("using generator 2")
 
         elif settings.max_rules == 2 and not settings.pi_enabled:
             gen = Generator3
             settings.logger.debug("using generator 3")
+
         else:
             gen = Generator1
             settings.logger.debug("using generate")
@@ -192,7 +193,7 @@ class Popper():
                 # prog: Optional[Program]
                 with settings.stats.duration('generate'):
                     prog = generator.get_prog()
-                    settings.logger.info("Generated prog: {}".format(prog))
+                    settings.logger.debug("Generated prog: {}".format(prog))
                     if prog is None:
                         break
 

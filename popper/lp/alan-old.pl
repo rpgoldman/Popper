@@ -1,5 +1,6 @@
 %% ##################################################
 %% THIS FILE CONTAINS THE ASP PROGRAM GENERATOR, CALLED ALAN
+%% This ASP generator is used by gen1 and gen3.
 %% ##################################################
 
 #defined direction/2.
