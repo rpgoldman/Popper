@@ -106,3 +106,18 @@ class Generator(abc.ABC):
             prog.append((rule))
 
         return frozenset(prog)
+
+    @staticmethod
+    def arg_to_symbol(arg):
+        if isinstance(arg, tuple):
+            return clingo.Tuple_(tuple(Generator.arg_to_symbol(a) for a in arg))
+        if isinstance(arg, int):
+            return clingo.Number(arg)
+        if isinstance(arg, str):
+            return clingo.Function(arg)
+        raise TypeError(f"Cannot translate {arg} to clingo Symbol")
+
+    @staticmethod
+    def atom_to_symbol(pred, args):
+        xs = tuple(Generator.arg_to_symbol(arg) for arg in args)
+        return clingo.Function(name=pred, arguments=xs)

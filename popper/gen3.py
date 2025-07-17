@@ -1,36 +1,23 @@
-import numbers
 import operator
 import re
 from collections import defaultdict
 from typing import Optional
 
 import clingo
-import clingo.script
 import clingo.configuration
+import clingo.script
 
 from .abs_generate import Generator as AbstractGenerator
 from .resources import resource_string
 from .util import rule_is_recursive, Constraint, Literal
 
 clingo.script.enable_python()
-from clingo import Function, Number, Tuple_, Model
+from clingo import Model
 from itertools import permutations
 
 DEFAULT_HEURISTIC = """
 #heuristic size(N). [1000-N,true]
 """
-
-def arg_to_symbol(arg):
-    if isinstance(arg, tuple):
-        return Tuple_(tuple(arg_to_symbol(a) for a in arg))
-    if isinstance(arg, numbers.Number):
-        return Number(arg)
-    if isinstance(arg, str):
-        return Function(arg)
-
-def atom_to_symbol(pred, args):
-    xs = tuple(arg_to_symbol(arg) for arg in args)
-    return Function(name = pred, arguments = xs)
 
 class Generator(AbstractGenerator):
     model: Optional[Model]
@@ -163,7 +150,7 @@ class Generator(AbstractGenerator):
         if k in self.seen_symbols:
             symbol = self.seen_symbols[k]
         else:
-            symbol = backend.add_atom(atom_to_symbol(pred, args))
+            symbol = backend.add_atom(AbstractGenerator.atom_to_symbol(pred, args))
             self.seen_symbols[k] = symbol
         return symbol
 
@@ -290,7 +277,7 @@ class Generator(AbstractGenerator):
         if size in self.pruned_sizes:
             return
         self.pruned_sizes.add(size)
-        size_con = [(atom_to_symbol("size", (size,)), True)]
+        size_con = [(AbstractGenerator.atom_to_symbol("size", (size,)), True)]
         self.model.context.add_nogood(size_con)
 
     def constrain(self, tmp_new_cons):
@@ -338,7 +325,7 @@ class Generator(AbstractGenerator):
                 try:
                     x = self.cached_clingo_atoms[k]
                 except KeyError:
-                    x = (atom_to_symbol(pred, args), sign)
+                    x = (AbstractGenerator.atom_to_symbol(pred, args), sign)
                     self.cached_clingo_atoms[k] = x
                 nogood.append(x)
             tmp(nogood)
