@@ -1,31 +1,13 @@
-import numbers
 import re
 from itertools import permutations
-from typing import Any, Set, Tuple, Optional
+from typing import Any, Set, Tuple, Optional, List
 
 import clingo
 import clingo.script
-from clingo import Function, Number, Tuple_
 
-from .util import Constraint, Literal, Settings
-from . abs_generate import Generator as AbstractGenerator
+from .abs_generate import Generator as AbstractGenerator
 from .resources import resource_string
-
-
-def arg_to_symbol(arg):
-    if isinstance(arg, tuple):
-        return Tuple_(tuple(arg_to_symbol(a) for a in arg))
-    if isinstance(arg, numbers.Number):
-        return Number(arg)
-    if isinstance(arg, str):
-        return Function(arg)
-    raise TypeError(f"Cannot translate {arg} to clingo Symbol")
-
-
-def atom_to_symbol(pred, args) -> Function:
-    xs = tuple(arg_to_symbol(arg) for arg in args)
-    return Function(name=pred, arguments=xs)
-
+from .util import Constraint, Literal, Settings
 
 DEFAULT_HEURISTIC = """
 #heuristic size(N). [1000-N,true]
@@ -48,12 +30,14 @@ class Generator(AbstractGenerator):
     solver: clingo.Control
     handle: Optional[clingo.SolveHandle]
 
-    def __init__(self, settings: Settings, bkcons=[]):
+    def __init__(self, settings: Settings, bkcons: Optional[List]=None):
         self.savings = 0
         self.settings = settings
         self.cached_clingo_atoms = {}
         self.handle = None
         self.pruned_sizes = set()
+        if bkcons is None:
+            bkcons = list()
 
         encoding = self.build_encoding(bkcons, settings)
 
@@ -211,7 +195,7 @@ class Generator(AbstractGenerator):
         if size in self.pruned_sizes:
             return
         self.pruned_sizes.add(size)
-        size_con = [(atom_to_symbol("size", (size,)), True)]
+        size_con = [(AbstractGenerator.atom_to_symbol("size", (size,)), True)]
         self.model.context.add_nogood(size_con)
 
     def constrain(self, tmp_new_cons):
@@ -250,7 +234,7 @@ class Generator(AbstractGenerator):
                 try:
                     x = cached_clingo_atoms[k]
                 except KeyError:
-                    x = (atom_to_symbol(pred, args), sign)
+                    x = (AbstractGenerator.atom_to_symbol(pred, args), sign)
                     cached_clingo_atoms[k] = x
                 nogood.append(x)
             tmp(nogood)

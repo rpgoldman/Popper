@@ -1,8 +1,7 @@
-import numbers
 import operator
 import re
 from collections import defaultdict
-from typing import Optional, Sequence, Set
+from typing import Optional, Sequence, Set, Dict
 
 import clingo
 import clingo.script
@@ -12,7 +11,7 @@ from .util import rule_is_recursive, Constraint, Literal, remap_variables
 clingo.script.enable_python()
 # ruff: noqa: E402
 # flake8: noqa: E402
-from clingo import Function, Number, Tuple_, Model, Symbol
+from clingo import Symbol
 from itertools import permutations
 import dataclasses
 from . abs_generate import Generator as AbstractGenerator
@@ -32,18 +31,6 @@ class VarVar(Var):
     rule: RuleVar
 
 META_PREDS = {'<', '==', '>='}
-
-def arg_to_symbol(arg):
-    if isinstance(arg, tuple):
-        return Tuple_(tuple(arg_to_symbol(a) for a in arg))
-    if isinstance(arg, numbers.Number):
-        return Number(arg)
-    if isinstance(arg, str):
-        return Function(arg)
-
-def atom_to_symbol(pred, args):
-    xs = tuple(arg_to_symbol(arg) for arg in args)
-    return Function(name = pred, arguments = xs)
 
 def find_all_vars(body):
     all_vars = set()
@@ -66,7 +53,7 @@ def build_seen_rule_literal(handle, rule_var):
     return Literal('seen_rule', (handle, rule_var))
 
 def build_rule_literals(rule, rule_var, pi=False):
-    literals = []
+    # literals = []
     head, body = rule
     if pi:
         yield Literal('head_literal', (rule_var, head.predicate, len(head.arguments), tuple(vo_variable2(rule_var, v) for v in head.arguments)))
@@ -80,9 +67,22 @@ def build_rule_literals(rule, rule_var, pi=False):
         yield gteq(rule_var, 1)
 
 class Generator(AbstractGenerator):
+    seen_handles: Set[str]
+    assigned: Dict
+    seen_symbols: Dict
+    cached_clingo_atoms: Dict
+    cached_handles: Dict[int, str]
+    cached_grounded: Dict
+    seen_assignments: Dict
+    cached4: Dict
+    bad_handles: Set
+    all_handles: Set
+    all_ground_cons: Set
+    new_ground_cons: Set
 
-    model: Optional[Model]
-    def __init__(self, settings, bkcons=[]):
+    def __init__(self, settings, bkcons=None):
+        if bkcons is None:
+            bkcons = []
         self.savings = 0
         self.settings = settings
         self.seen_handles = set()
@@ -264,7 +264,7 @@ class Generator(AbstractGenerator):
         if k in self.seen_symbols:
             symbol = self.seen_symbols[k]
         else:
-            symbol = backend.add_atom(atom_to_symbol(pred, args))
+            symbol = backend.add_atom(AbstractGenerator.atom_to_symbol(pred, args))
             self.seen_symbols[k] = symbol
         return symbol
 
@@ -284,8 +284,8 @@ class Generator(AbstractGenerator):
 
         prog = []
         for rule_index, body in rule_index_to_body.items():
-            body = frozenset(body)
-            rule = head, body
+            fbody = frozenset(body)
+            rule = head, fbody
             prog.append((rule))
 
         return frozenset(prog)
@@ -335,7 +335,7 @@ class Generator(AbstractGenerator):
 
 
         if self.settings.no_bias:
-            self.bad_handles = []
+            self.bad_handles = set()
         for handle in self.bad_handles:
             # print(handle)
             # if we know that rule_xyz is bad
@@ -443,7 +443,7 @@ class Generator(AbstractGenerator):
         self.solver.assign_external(symbol, True)
 
     def prune_size(self, size):
-        size_con = [(atom_to_symbol("size", (size,)), True)]
+        size_con = [(AbstractGenerator.atom_to_symbol("size", (size,)), True)]
         # print('moo', size)
         self.model.context.add_nogood(size_con)
 
@@ -548,7 +548,7 @@ class Generator(AbstractGenerator):
                 try:
                     x = self.cached_clingo_atoms[k]
                 except KeyError:
-                    x = (atom_to_symbol(pred, args), sign)
+                    x = (AbstractGenerator.atom_to_symbol(pred, args), sign)
                     self.cached_clingo_atoms[k] = x
                 nogood.append(x)
             nogoods.append(nogood)
@@ -559,8 +559,11 @@ class Generator(AbstractGenerator):
 
         self.new_ground_cons = set()
 
-    def make_rule_handle(self, rule):
+    def make_rule_handle(self, rule: Rule) -> str:
         cached_handles = self.cached_handles
+        # QUESTION: Why have cached_handles be indexed by the hash value
+        # of the rule, instead of the rule itself? What if there's a
+        # collision?
         k = hash(rule)
         if k in cached_handles:
             return cached_handles[k]
@@ -577,7 +580,7 @@ class Generator(AbstractGenerator):
         literals = []
         recs = []
         for rule_id, rule in enumerate(prog):
-            head, body = rule
+            _head, body = rule
             rule_var = vo_clause(rule_id)
             rule_index[rule] = rule_var
 
@@ -669,7 +672,7 @@ class Generator(AbstractGenerator):
         literals = []
         recs = []
         for rule_id, rule in enumerate(prog):
-            head, body = rule
+            _head, body = rule
             rule_var = vo_clause(rule_id)
             rule_index[rule] = rule_var
 
