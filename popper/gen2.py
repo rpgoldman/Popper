@@ -7,6 +7,7 @@ import clingo.script
 
 from .abs_generate import Generator as AbstractGenerator
 from .resources import resource_string
+from .type_defs import RuleBase
 from .util import Constraint, Literal, Settings
 
 DEFAULT_HEURISTIC = """
@@ -180,16 +181,7 @@ class Generator(AbstractGenerator):
 
         return self.parse_model_single_rule(self.model.symbols(shown=True))
 
-    def parse_model_single_rule(self, model):
-        settings = self.settings
-        head = settings.head_literal
-        body = set()
-        cached_literals = settings.cached_literals
-        for atom in model:
-            args = atom.arguments
-            body.add(cached_literals[args[1].name, tuple(args[3].arguments)])
-        rule = head, frozenset(body)
-        return frozenset({rule})
+
 
     def prune_size(self, size):
         if size in self.pruned_sizes:
