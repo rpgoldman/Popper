@@ -154,41 +154,6 @@ class Generator(AbstractGenerator):
             self.seen_symbols[k] = symbol
         return symbol
 
-    def parse_model_recursion(self, model):
-        settings = self.settings
-        rule_index_to_body = defaultdict(set)
-        head = settings.head_literal
-        cached_literals = settings.cached_literals
-
-        for atom in model:
-            args = atom.arguments
-            rule_index = args[0].number
-            predicate = args[1].name
-            atom_args = tuple(args[3].arguments)
-            literal = cached_literals[(predicate, atom_args)]
-            rule_index_to_body[rule_index].add(literal)
-
-        prog = []
-        for rule_index, body in rule_index_to_body.items():
-            body = frozenset(body)
-            rule = head, body
-            prog.append((rule))
-
-        return frozenset(prog)
-
-    def parse_model_single_rule(self, model):
-        settings = self.settings
-        head = settings.head_literal
-        body = set()
-        cached_literals = settings.cached_literals
-        for atom in model:
-            args = atom.arguments
-            predicate = args[1].name
-            atom_args = tuple(args[3].arguments)
-            literal = cached_literals[(predicate, atom_args)]
-            body.add(literal)
-        rule = head, frozenset(body)
-        return frozenset([rule])
 
     def update_solver(self, size):
         self.update_number_of_literals(size)

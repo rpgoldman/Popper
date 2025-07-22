@@ -1,11 +1,10 @@
 import abc
 from collections import defaultdict
-from typing import Set, TYPE_CHECKING, List, Optional
+from typing import Set, TYPE_CHECKING, List, Optional, Sequence
 
 import clingo
 
-from .type_defs import Literal, RuleBase
-
+from .type_defs import Literal, RuleBase, Rule
 
 if TYPE_CHECKING:
     from .util import Settings
@@ -65,7 +64,7 @@ class Generator(abc.ABC):
     def init_solver(self, encoding: str) -> clingo.Control:
         """Incorporate the `encoding` into a new solver and return it."""
 
-    def parse_model_pi(self, model) -> RuleBase:
+    def parse_model_pi(self, model: Sequence[clingo.Symbol]) -> RuleBase:
         settings = self.settings
         # directions = defaultdict(lambda: defaultdict(lambda: '?'))
         rule_index_to_body = defaultdict(set)
@@ -103,7 +102,7 @@ class Generator(abc.ABC):
             for body_pred, body_args, _body_arity in rule_index_to_body[rule_index]:
                 body.add(Literal(body_pred, body_args))
             rule = head, frozenset(body)
-            prog.append((rule))
+            prog.append(rule)
 
         return frozenset(prog)
 
@@ -121,3 +120,39 @@ class Generator(abc.ABC):
     def atom_to_symbol(pred, args):
         xs = tuple(Generator.arg_to_symbol(arg) for arg in args)
         return clingo.Function(name=pred, arguments=xs)
+
+    def parse_model_single_rule(self, model: Sequence[clingo.Symbol]) -> RuleBase:
+        settings = self.settings
+        head: Literal = settings.head_literal
+        body: Set[Literal] = set()
+        cached_literals = settings.cached_literals
+        for atom in model:
+            args = atom.arguments
+            predicate = args[1].name
+            atom_args = tuple(args[3].arguments)
+            literal = cached_literals[(predicate, atom_args)]
+            body.add(literal)
+        rule: Rule = head, frozenset(body)
+        return frozenset([rule])
+
+    def parse_model_recursion(self, model: Sequence[clingo.Symbol]) -> RuleBase:
+        settings = self.settings
+        rule_index_to_body = defaultdict(set)
+        head = settings.head_literal
+        cached_literals = settings.cached_literals
+
+        for atom in model:
+            args = atom.arguments
+            rule_index = args[0].number
+            predicate = args[1].name
+            atom_args = tuple(args[3].arguments)
+            literal = cached_literals[(predicate, atom_args)]
+            rule_index_to_body[rule_index].add(literal)
+
+        prog = []
+        for rule_index, body in rule_index_to_body.items():
+            fbody = frozenset(body)
+            rule = head, fbody
+            prog.append(rule)
+
+        return frozenset(prog)
