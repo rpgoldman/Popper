@@ -1,5 +1,6 @@
 import logging
 import os
+import traceback
 from collections import defaultdict
 from contextlib import contextmanager
 from functools import cache
@@ -12,8 +13,7 @@ from janus_swi import consult, query_once
 from janus_swi.janus import PrologError
 
 from .util import Literal, calc_prog_size, calc_rule_size, format_rule, order_prog, prog_hash, prog_is_recursive
-from .resources import resource_string, resource_filename, close_resource_file
-
+from .resources import resource_filename, close_resource_file
 
 logger: Optional[logging.Logger] = None
 
@@ -26,10 +26,10 @@ def bool_query(query):
         return query_once(query)['truth']
     except PrologError as e:
         if logger is not None:
-            logger.debug(f"Error in SWI bool_query {query}: {e}")
+            logger.error(f"Error in SWI bool_query {query}: {e}")
         return False
 
-class Tester():
+class Tester:
 
     def __init__(self, settings):
         global logger
@@ -67,8 +67,9 @@ class Tester():
         if atoms:
             try:
                 settings.recall = settings.recall | deduce_neg_example_recalls(settings, atoms)
-            except Exception as e:
-                print(e)
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                logger.error("Error finding recall: %s: %s", type(e), e)
+                logger.error("Traceback:\n%s", "".join(traceback.format_exception(e)))
 
         self.num_pos = query_once('findall(_K, pos_index(_K, _Atom), _S), length(_S, N)')['N']
         self.num_neg = query_once('findall(_K, neg_index(_K, _Atom), _S), length(_S, N)')['N']
@@ -297,7 +298,7 @@ class Tester():
         yield
         for predicate, arity in current_clauses:
             args = ','.join(['_'] * arity)
-            x = query_once(f"retractall({predicate}({args}))")
+            query_once(f"retractall({predicate}({args}))")
 
     def is_non_functional(self, prog):
         with self.using(prog):
@@ -477,7 +478,7 @@ class Tester():
 
                 # WTF IS GOING ON HERE?
                 if a in keep and b in keep:
-                    assert(False)
+                    assert False
                 if a not in pointless and b not in pointless:
                     if a in keep:
                         pointless.add(b)
