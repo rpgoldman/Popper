@@ -1,6 +1,6 @@
 import re
 from itertools import permutations
-from typing import Any, Set, Tuple, Optional, List
+from typing import Any, Set, Tuple, Optional, List, Callable
 
 import clingo
 import clingo.script
@@ -214,22 +214,8 @@ class Generator(AbstractGenerator):
                 cons_ = self.unsat_constraint2(con_prog)
                 new_ground_cons.update(cons_)
 
-        tmp = self.model.context.add_nogood
-        cached_clingo_atoms = self.cached_clingo_atoms
+        self.instantiate_constraints(new_ground_cons)
 
-        for ground_body in new_ground_cons:
-
-            # print(', '.join(sorted(map(str,ground_body))))
-            nogood = []
-            for sign, pred, args in ground_body:
-                k = hash((sign, pred, args))
-                try:
-                    x = cached_clingo_atoms[k]
-                except KeyError:
-                    x = (AbstractGenerator.atom_to_symbol(pred, args), sign)
-                    cached_clingo_atoms[k] = x
-                nogood.append(x)
-            tmp(nogood)
 
     def unsat_constraint2(self, body):
         # if no types, remap variables
