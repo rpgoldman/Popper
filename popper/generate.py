@@ -508,23 +508,7 @@ class Generator(AbstractGenerator):
                 # print(sorted(ground_body))
                 self.all_ground_cons.add(frozenset(ground_body))
 
-        nogoods = []
-        for ground_body in ground_bodies:
-            nogood = []
-            for sign, pred, args in ground_body:
-                k = hash((sign, pred, args))
-                try:
-                    x = self.cached_clingo_atoms[k]
-                except KeyError:
-                    x = (AbstractGenerator.atom_to_symbol(pred, args), sign)
-                    self.cached_clingo_atoms[k] = x
-                nogood.append(x)
-            nogoods.append(nogood)
-
-        # with self.settings.stats.duration('constrain_clingo'):
-        for x in nogoods:
-            model.context.add_nogood(x)
-
+        self.instantiate_constraints(ground_bodies)
         self.new_ground_cons = set()
 
     def make_rule_handle(self, rule: Rule) -> str:

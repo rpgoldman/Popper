@@ -1,6 +1,6 @@
 import abc
 from collections import defaultdict
-from typing import Set, TYPE_CHECKING, List, Optional, Sequence
+from typing import Set, TYPE_CHECKING, List, Optional, Sequence, Tuple, Callable, Dict
 
 import clingo
 
@@ -15,6 +15,7 @@ class Generator(abc.ABC):
     solver: clingo.Control
     handle: Optional[clingo.SolveHandle]
     model: Optional[clingo.Model]
+    cached_clingo_atoms: Dict[int, clingo.Symbol] # hash of literal to clingo Symbol
 
     @abc.abstractmethod
     def get_prog(self) -> Optional[RuleBase]:
@@ -156,3 +157,18 @@ class Generator(abc.ABC):
             prog.append(rule)
 
         return frozenset(prog)
+
+    def instantiate_constraints(self, new_ground_cons):
+        tmp: Callable[[List[Tuple[clingo.Symbol, bool]]], None] = self.model.context.add_nogood
+        cached_clingo_atoms = self.cached_clingo_atoms
+        for ground_body in new_ground_cons:
+            nogood = []
+            for sign, pred, args in ground_body:
+                k = hash((sign, pred, args))
+                try:
+                    x = cached_clingo_atoms[k]
+                except KeyError:
+                    x = (Generator.atom_to_symbol(pred, args), sign)
+                    cached_clingo_atoms[k] = x
+                nogood.append(x)
+            tmp(nogood)

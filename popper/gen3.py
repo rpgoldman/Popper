@@ -281,20 +281,7 @@ class Generator(AbstractGenerator):
                 xs = set(self.build_banish_constraint(con_prog))
                 new_cons.update(xs)
 
-        tmp = self.model.context.add_nogood
-
-        for ground_body in new_cons:
-            nogood = []
-            for sign, pred, args in ground_body:
-                k = hash((sign, pred, args))
-                try:
-                    x = self.cached_clingo_atoms[k]
-                except KeyError:
-                    x = (AbstractGenerator.atom_to_symbol(pred, args), sign)
-                    self.cached_clingo_atoms[k] = x
-                nogood.append(x)
-            tmp(nogood)
-
+        self.instantiate_constraints(new_cons)
         # add ground cons
         self.new_ground_cons.update(new_cons)
 
