@@ -184,7 +184,7 @@ def format_rule(rule):
     head_str = ''
     if head:
         head_str = format_literal(head)
-    body_str = ','.join(format_literal(literal) for literal in body)
+    body_str = ','.join(sorted(format_literal(literal) for literal in body))
     return f'{head_str}:- {body_str}.'
 
 
