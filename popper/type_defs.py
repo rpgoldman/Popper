@@ -1,9 +1,10 @@
 from typing import FrozenSet, NamedTuple, Tuple
+from clingo import Symbol
 
 
 class Literal(NamedTuple):
     predicate: str
-    arguments: tuple
+    arguments: Tuple[Symbol, ...]
 
 
 Rule = Tuple[Literal, FrozenSet[Literal]]
