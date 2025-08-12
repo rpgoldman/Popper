@@ -1,13 +1,12 @@
 import re
 from itertools import permutations
-from typing import Any, Set, Tuple, Optional, List, Callable
+from typing import Any, Set, Tuple, Optional, List
 
 import clingo
 import clingo.script
 
 from .abs_generate import Generator as AbstractGenerator
 from .resources import resource_string
-from .type_defs import RuleBase
 from .util import Constraint, Literal, Settings
 
 DEFAULT_HEURISTIC = """

@@ -497,7 +497,7 @@ class Settings:
                 if len(args) != arity:
                     continue
                 literal = Literal(pred, args)
-                self.cached_literals[(pred, k)] = literal
+                self.cache_literal(pred, k, literal)
                 if self.has_directions:
                     self.literal_inputs[(pred, args)] = frozenset(
                         arg for i, arg in enumerate(args) if directions[pred][i] == '+')
@@ -517,7 +517,7 @@ class Settings:
             if len(args) != arity:
                 continue
             literal = Literal(pred, args)
-            self.cached_literals[(pred, k)] = literal
+            self.cache_literal(pred, k, literal)
 
         if self.max_rules == None:
             if self.recursion_enabled or self.pi_enabled:
@@ -543,6 +543,16 @@ class Settings:
         self.logger.debug(f'Max body: {self.max_body}')
 
         self.single_solve = not (self.recursion_enabled or self.pi_enabled)
+
+    def cache_literal(self, pred: str, k: Tuple[clingo.Symbol, ...], literal: Literal) -> None:
+        self.cached_literals[(pred, k)] = literal
+
+    def retrieve_literal(self, pred:str, args: Tuple[clingo.Symbol, ...]) -> Literal:
+        if (pred, args) in self.cached_literals:
+            return self.cached_literals[(pred, args)]
+        new_literal = Literal(pred, tuple(x.number for x in args))
+        self.cached_literals[(pred, args)] = new_literal
+        return new_literal
 
     def print_incomplete_solution2(self, prog, tp, fn, tn, fp, size):
         self.logger.info('*' * 20)

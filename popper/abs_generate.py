@@ -126,12 +126,11 @@ class Generator(abc.ABC):
         settings = self.settings
         head: Literal = settings.head_literal
         body: Set[Literal] = set()
-        cached_literals = settings.cached_literals
         for atom in model:
             args = atom.arguments
             predicate = args[1].name
             atom_args = tuple(args[3].arguments)
-            literal = cached_literals[(predicate, atom_args)]
+            literal: Literal = settings.retrieve_literal(predicate, atom_args)
             body.add(literal)
         rule: Rule = head, frozenset(body)
         return frozenset([rule])
@@ -140,14 +139,13 @@ class Generator(abc.ABC):
         settings = self.settings
         rule_index_to_body = defaultdict(set)
         head = settings.head_literal
-        cached_literals = settings.cached_literals
 
         for atom in model:
             args = atom.arguments
             rule_index = args[0].number
             predicate = args[1].name
             atom_args = tuple(args[3].arguments)
-            literal = cached_literals[(predicate, atom_args)]
+            literal = settings.retrieve_literal(predicate, atom_args)
             rule_index_to_body[rule_index].add(literal)
 
         prog = []
