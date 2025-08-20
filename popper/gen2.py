@@ -1,6 +1,6 @@
 import re
 from itertools import permutations
-from typing import Any, Set, Tuple, Optional, List
+from typing import Any, Set, Tuple, Optional, List, Iterator
 
 import clingo
 import clingo.script
@@ -28,7 +28,7 @@ class Generator(AbstractGenerator):
     settings: Settings
     model: Optional[clingo.Model]
     solver: clingo.Control
-    handle: Optional[clingo.SolveHandle]
+    handle: Optional[Iterator[clingo.Model]]
 
     def __init__(self, settings: Settings, bkcons: Optional[List]=None):
         self.savings = 0
@@ -321,8 +321,8 @@ class Generator(AbstractGenerator):
             yield assignment
 
 
-def remap_variables(rule: Tuple[Literal,Any]):
-    head: Literal
+def remap_variables(rule: Tuple[Optional[Literal],Any]):
+    head: Optional[Literal]
     head, body = rule
     head_vars: Set = set()
 
