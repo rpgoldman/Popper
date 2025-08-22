@@ -179,12 +179,15 @@ def format_literal(literal):
     return f'{pred}({args})'
 
 
-def format_rule(rule):
+def format_rule(rule, sort: bool = False):
     head, body = rule
     head_str = ''
     if head:
         head_str = format_literal(head)
-    body_str = ','.join(sorted(format_literal(literal) for literal in body))
+    if sort:
+        body_str = ','.join(sorted(format_literal(literal) for literal in body))
+    else:
+        body_str = ','.join(format_literal(literal) for literal in body)
     return f'{head_str}:- {body_str}.'
 
 
@@ -263,6 +266,7 @@ class Settings:
     batch_size: int
     best_mdl: int # best model description length
     cached_literals: Dict[Tuple[str, Any], Literal]
+    cached_atom_args: Dict[Tuple[clingo.Symbol, ...], Tuple[int, ...]]
     datalog: bool
     exact_maxsat_solver: str
     exact_maxsat_solver_params: str
@@ -278,6 +282,12 @@ class Settings:
     showcons: bool
     solution_found: Any
     show_failures: bool  # display detailed FP and FN information
+
+    # domain features
+    has_directions: bool
+    non_datalog_flag: bool
+    pi_enabled: bool
+    recursion_enabled: bool
 
     def __init__(self, cmd_line=False, info=True, debug=False, show_stats=True, max_literals=MAX_LITERALS,
                  timeout=TIMEOUT, quiet=False, eval_timeout=EVAL_TIMEOUT, max_examples=MAX_EXAMPLES, max_body=None,
@@ -318,6 +328,7 @@ class Settings:
                 self.bk_file = bk_file
                 self.bias_file = bias_file
 
+        # AFAICT, this is dead code. rpg
         # self.tmp_cache = set()
         self.logger = logging.getLogger("popper")
 
@@ -561,8 +572,9 @@ class Settings:
             self.logger.info(f'tp:{tp} fn:{fn} tn:{tn} fp:{fp} size:{size} mdl:{size + fn + fp}')
         else:
             self.logger.info(f'tp:{tp} fn:{fn} tn:{tn} fp:{fp} size:{size}')
+        sort_rules = not (self.recursion_enabled or self.has_directions)
         for rule in order_prog(prog):
-            self.logger.info(format_rule(self.order_rule(rule)))
+            self.logger.info(format_rule(self.order_rule(rule), sort_rules))
         self.logger.info('*' * 20)
 
     def print_prog_score(self, prog, score: Tuple[int, int, int, int, int]) -> None:
@@ -580,8 +592,9 @@ class Settings:
         else:
             print(f'Precision:{precision} Recall:{recall} TP:{tp} FN:{fn} TN:{tn} FP:{fp} Size:{size}')
         # print(self.format_prog(order_prog(prog)))
+        sort_rules = not (self.recursion_enabled or self.has_directions)
         for rule in order_prog(prog):
-            print(format_rule(self.order_rule(rule)))
+            print(format_rule(self.order_rule(rule), sort_rules))
         # print(self.format_prog(order_prog(prog)))
         print('*' * 30)
 
@@ -879,5 +892,9 @@ def remap_variables(rule: Tuple[Any, Any]) -> Rule:
     return head, frozenset(new_body)
 
 
-def format_prog(prog):
-    return '\n'.join(sorted(format_rule(rule) for rule in prog))
+def format_prog(prog, sort: bool = False):
+    if sort:
+        return '\n'.join(sorted(format_rule(rule, True) for rule in prog))
+    # it's PROBABLY benign to sort the rules, but just in case, don't do it
+    # if sort is set to False.
+    return '\n'.join(format_rule(rule, False) for rule in prog)

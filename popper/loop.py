@@ -208,7 +208,7 @@ class Popper():
 
                 if settings.debug:
                     settings.logger.debug(f'Program {settings.stats.total_programs}:')
-                    settings.logger.debug(format_prog(prog))
+                    settings.logger.debug(format_prog(prog, not(settings.recursion_enabled or settings.directions)))
 
                 if last_size is None or prog_size != last_size:
                     size_change = True

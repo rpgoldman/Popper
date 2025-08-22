@@ -12,7 +12,8 @@ from bitarray.util import ones
 from janus_swi import consult, query_once
 from janus_swi.janus import PrologError
 
-from .util import Literal, calc_prog_size, calc_rule_size, format_rule, order_prog, prog_hash, prog_is_recursive
+from .util import Literal, calc_prog_size, calc_rule_size, format_rule, order_prog, prog_hash, prog_is_recursive, \
+    Settings
 from .resources import resource_filename, close_resource_file
 
 logger: Optional[logging.Logger] = None
@@ -30,6 +31,7 @@ def bool_query(query):
         return False
 
 class Tester:
+    settings: Settings
 
     def __init__(self, settings):
         global logger
@@ -272,7 +274,10 @@ class Tester:
 
     @cache
     def parse_rule_for_recursion(self, rule):
-        return format_rule(self.settings.order_rule(rule))[:-1]
+        settings: Settings = self.settings
+        return format_rule(settings.order_rule(rule),
+                           not (settings.recursion_enabled or settings.has_directions)
+                           )[:-1]
 
     @contextmanager
     def using(self, prog):
