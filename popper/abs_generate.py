@@ -1,6 +1,6 @@
 import abc
 from collections import defaultdict
-from typing import Set, TYPE_CHECKING, List, Optional, Sequence, Tuple, Callable, Dict
+from typing import Set, TYPE_CHECKING, List, Optional, Sequence, Tuple, Callable, Dict, Iterator
 
 import clingo
 
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 class Generator(abc.ABC):
     settings: "Settings"
     solver: clingo.Control
-    handle: Optional[clingo.SolveHandle]
+    handle: Optional[Iterator[clingo.Model]]
     model: Optional[clingo.Model]
     cached_clingo_atoms: Dict[int, clingo.Symbol] # hash of literal to clingo Symbol
 
