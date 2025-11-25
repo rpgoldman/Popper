@@ -191,6 +191,7 @@ class Generator(AbstractGenerator):
 
     def constrain(self, tmp_new_cons):
         new_ground_cons = set()
+        logger = self.settings.logger
 
         for xs in tmp_new_cons:
             con_type = xs[0]
@@ -201,6 +202,7 @@ class Generator(AbstractGenerator):
                 if self.settings.noisy and len(xs) > 2:
                     con_size = xs[2]
                 # print('gen', con_type)
+                logger.debug(f"constraint: {'gen' if con_type == Constraint.GENERALISATION else 'banish'}: {con_prog}")
                 ground_rules2 = tuple(self.build_generalisation_constraint3(con_prog, con_size))
                 new_ground_cons.update(ground_rules2)
             elif con_type == Constraint.SPECIALISATION:
@@ -208,9 +210,11 @@ class Generator(AbstractGenerator):
                 if self.settings.noisy and len(xs) > 2:
                     con_size = xs[2]
                 ground_rules2 = tuple(self.build_specialisation_constraint3(con_prog, con_size))
+                logger.debug(f"constraint: spec: {con_prog}")
                 new_ground_cons.update(ground_rules2)
             elif con_type == Constraint.UNSAT:
                 cons_ = self.unsat_constraint2(con_prog)
+                logger.debug(f"constraint: unsat: {con_prog}")
                 new_ground_cons.update(cons_)
 
         self.instantiate_constraints(new_ground_cons)
