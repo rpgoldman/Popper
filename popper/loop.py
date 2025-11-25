@@ -4,9 +4,6 @@ from functools import cache
 from itertools import chain, combinations, permutations
 from logging import Logger
 from typing import Any, List, Optional, Set, Tuple
-from .util import timeout, format_rule, rule_is_recursive, prog_is_recursive, prog_has_invention, calc_prog_size, \
-    format_literal, Constraint, mdl_score, suppress_stdout_stderr, get_raw_prog, Literal, remap_variables, format_prog, \
-    order_prog
 
 from bitarray.util import any_and, ones, subset
 

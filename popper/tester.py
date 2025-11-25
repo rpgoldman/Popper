@@ -1,3 +1,4 @@
+import datetime
 import logging
 import os
 import traceback
@@ -11,7 +12,6 @@ from bitarray.util import ones
 from janus_swi import query_once, consult, cmd
 from janus_swi.janus import PrologError
 
-from .util import order_prog, prog_is_recursive, calc_rule_size, calc_prog_size, prog_hash, \
 from .util import Literal, calc_prog_size, calc_rule_size, format_rule, order_prog, prog_hash, prog_is_recursive, \
     Settings
 from .resources import resource_filename, close_resource_file
