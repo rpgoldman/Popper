@@ -1,12 +1,12 @@
 import operator
 import re
 from collections import defaultdict
-from typing import Optional, Sequence, Set, Dict
+from typing import Optional, Sequence, Set, Dict, List
 
 import clingo
 import clingo.script
 
-from .util import rule_is_recursive, Constraint, Literal, remap_variables
+from .util import rule_is_recursive, Constraint, Literal, remap_variables, Settings
 
 clingo.script.enable_python()
 # ruff: noqa: E402
@@ -14,7 +14,7 @@ clingo.script.enable_python()
 from clingo import Symbol
 from itertools import permutations
 import dataclasses
-from . abs_generate import Generator as AbstractGenerator
+from .abs_generate import Generator as AbstractGenerator
 from . type_defs import Rule, RuleBase
 from .resources import resource_string
 
@@ -80,16 +80,15 @@ class Generator(AbstractGenerator):
     all_ground_cons: Set
     new_ground_cons: Set
 
-    def __init__(self, settings, bkcons=None):
+    def __init__(self, settings: Settings, bkcons: Optional[List] = None):
         if bkcons is None:
-            bkcons = []
+            bkcons = list()
+        super().__init__(settings)
         self.savings = 0
-        self.settings = settings
         self.seen_handles = set()
         self.assigned = {}
         self.seen_symbols = {}
         self.cached_clingo_atoms = {}
-        self.handle = None
         self.cached_handles = {}
         self.cached_grounded = {}
 
@@ -243,8 +242,7 @@ class Generator(AbstractGenerator):
 
     # @profile
     def get_prog(self) -> Optional[RuleBase]:
-        if self.handle is None:
-            self.handle = iter(self.solver.solve(yield_ = True))
+        self.set_handle()
         self.model = next(self.handle, None)
         if self.model is None:
             return None
@@ -345,7 +343,7 @@ class Generator(AbstractGenerator):
         self.bad_handles = set()
         self.all_handles = set()
 
-        self.handle = iter(self.solver.solve(yield_ = True))
+        self.set_handle(reset=True)
 
     def update_number_of_literals(self, size):
         # 1. Release those that have already been assigned

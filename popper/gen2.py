@@ -1,6 +1,6 @@
 import re
 from itertools import permutations
-from typing import Any, Set, Tuple, Optional, List, Iterator
+from typing import Any, Set, Tuple, Optional, List
 
 import clingo
 import clingo.script
@@ -25,20 +25,11 @@ class Generator(AbstractGenerator):
 
 
     """
-    settings: Settings
-    model: Optional[clingo.Model]
-    solver: clingo.Control
-    handle: Optional[Iterator[clingo.Model]]
-
     def __init__(self, settings: Settings, bkcons: Optional[List]=None):
-        self.savings = 0
-        self.settings = settings
-        self.cached_clingo_atoms = {}
-        self.handle = None
-        self.pruned_sizes = set()
         if bkcons is None:
             bkcons = list()
-
+        super().__init__(settings)
+        self.pruned_sizes = set()
         encoding = self.build_encoding(bkcons, settings)
 
         with open('/tmp/ENCODING-GEN.pro', 'w') as f:
@@ -46,8 +37,6 @@ class Generator(AbstractGenerator):
 
         solver = self.init_solver(encoding)
         self.solver = solver
-
-        self.model = None
 
     def init_solver(self, encoding) -> clingo.Control:
         solver = clingo.Control(['--heuristic=Domain', '-Wnone'])
@@ -96,7 +85,7 @@ class Generator(AbstractGenerator):
             xs2 = ','.join(f'X{i}' for i in range(arity)) # Xs
 
             if arity < max_arity:
-                prefix = ','.join(str(0) for i in range(arity, max_arity)) + ',' + xs1
+                prefix = ','.join([str(0)] * (max_arity - arity)) + ',' + xs1
             else:
                 prefix = xs1
 
@@ -117,7 +106,7 @@ class Generator(AbstractGenerator):
         xs1 = ','.join(f'V{i}' for i in range(max_arity)) # Vs
         for k in range(max_arity):
             xs2 = ','.join(f'V{i}' for i in range(k)) # Vs
-            if k > 0 and k < max_arity:
+            if 0 < k < max_arity:
                 xs2 += ','
             xs2 += ','.join(f'X{i}' for i in range(k, max_arity))
             order_cons.append(f'lower(({xs1}),({xs2})):- var_tuple(({xs1})), var_tuple(({xs2})), X{k} < V{k}.')
@@ -172,11 +161,15 @@ class Generator(AbstractGenerator):
         pass
 
     def get_prog(self):
-        if self.handle is None:
-            self.handle = iter(self.solver.solve(yield_=True))
+        self.settings.logger.debug(f"Setting handle: handle is {self.handle} clingo handle is {self.clingo_handle}")
+        self.set_handle()
+        self.settings.logger.debug(f"After setting handle: handle is {self.handle} clingo handle is {self.clingo_handle}")
+
         self.model = next(self.handle, None)
         if self.model is None:
+            self.settings.logger.debug("No model")
             return None
+        self.settings.logger.debug(f"Collected model: {self.model}")
 
         return self.parse_model_single_rule(self.model.symbols(shown=True))
 
