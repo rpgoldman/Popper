@@ -1,7 +1,7 @@
 import operator
 import re
 from collections import defaultdict
-from typing import Optional
+from typing import Optional, List
 
 import clingo
 import clingo.configuration
@@ -12,7 +12,6 @@ from .resources import resource_string
 from .util import rule_is_recursive, Constraint, Literal
 
 clingo.script.enable_python()
-from clingo import Model
 from itertools import permutations
 
 DEFAULT_HEURISTIC = """
@@ -20,15 +19,15 @@ DEFAULT_HEURISTIC = """
 """
 
 class Generator(AbstractGenerator):
-    model: Optional[Model]
 
-    def __init__(self, settings, bkcons=[]):
-        self.settings = settings
+    def __init__(self, settings, bkcons: Optional[List]=None):
+        if bkcons is None:
+            bkcons = list()
+        super().__init__(settings)
         self.seen_handles = set()
         self.assigned = {}
         self.seen_symbols = {}
         self.cached_clingo_atoms = {}
-        self.handle = None
         self.cached_handles = {}
         self.cached4 = {}
         self.pruned_sizes = set()
@@ -129,8 +128,7 @@ class Generator(AbstractGenerator):
         return encoding
 
     def get_prog(self):
-        if self.handle is None:
-            self.handle = iter(self.solver.solve(yield_ = True))
+        self.set_handle()
         self.model = next(self.handle, None)
         if self.model is None:
             return None
@@ -214,7 +212,7 @@ class Generator(AbstractGenerator):
         self.new_ground_cons = set()
         self.new_seen_rules = set()
 
-        self.handle = iter(self.solver.solve(yield_ = True))
+        self.set_handle(True)
 
     def update_number_of_literals(self, size):
         # 1. Release those that have already been assigned
@@ -638,7 +636,7 @@ def remap_variables(rule):
     head_vars = set()
 
     if head:
-        head_vars.extend(head.arguments)
+        head_vars.update(head.arguments)
 
     next_var = len(head_vars)
     lookup = {i:i for i in head_vars}

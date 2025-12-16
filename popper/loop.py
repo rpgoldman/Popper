@@ -1639,7 +1639,7 @@ def get_bk_cons(settings: Settings, tester: Tester):
             signal.signal(signal.SIGALRM, handler)
             signal.alarm(settings.bkcons_timeout)
             try:
-                xs = deduce_bk_cons(settings, tester)
+                xs = deduce_bk_cons(settings)
             except TimeoutError as _exc:
                 settings.logger.debug(f'Loading bkcons FAILURE')
             finally:

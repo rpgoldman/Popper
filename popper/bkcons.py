@@ -2,22 +2,27 @@ import numbers
 import sys
 import traceback
 from collections import defaultdict
-from itertools import product
-from traceback import format_tb
-
+from collections.abc import Hashable
+from itertools import product, permutations
+from typing import cast, Any, Dict, Iterable, Iterator, \
+    List, Tuple, TypeVar
 import clingo
 import clingo.script
 from clingo import Function, Number, Tuple_
 
-from .util import suppress_stdout_stderr
+from .util import suppress_stdout_stderr, Settings
+from .type_defs import Bit
+
+T = TypeVar("T", bound=Hashable)
 
 clingo.script.enable_python()
 
-tmp_map = {}
-for i in range(1,20):
+tmp_map: Dict[int, str] = {}
+for i in range(1, 20):
     tmp_map[i] = ','.join(f'V{j}' for j in range(i))
 
-arg_lookup = {clingo.Number(i):chr(ord('A') + i) for i in range(100)}
+arg_lookup = {clingo.Number(i): chr(ord('A') + i)
+              for i in range(100)}
 
 TIDY_OUTPUT = """
 #defined body_literal/4.
@@ -26,131 +31,131 @@ TIDY_OUTPUT = """
 #defined clause/1.
 """
 
-# def get_bias_preds(settings):
-#     solver = clingo.Control(['-Wnone'])
-#     with open(settings.bias_file) as f:
-#         solver.add('bias', [], f.read())
-#     solver.add('bias', [], TIDY_OUTPUT)
-#     solver.ground([('bias', [])])
 
-#     for x in solver.symbolic_atoms.by_signature('head_pred', arity=2):
-#         args = x.symbol.arguments
-#         symbol = args[0].name
-#         arity = args[1].number
-#         head_pred = symbol, arity
-
-#     head_pred, head_arity=  head_pred
-#     head_literal = Literal(head_pred, tuple(arg_lookup[clingo.Number(arg)] for arg in range(head_arity)))
-#     head_str =  f'{head_pred}({tmp_map[head_arity]})'
-
-#     body_preds = set()
-#     for x in solver.symbolic_atoms.by_signature('body_pred', arity=2):
-#         args = x.symbol.arguments
-#         symbol = args[0]
-#         arity = args[1].number
-#         body_preds.add((symbol, arity))
-#     return (head_pred, arity), body_preds
+all_myvars: List[str] = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
 
 
-from itertools import permutations
-
-all_myvars = ['A','B','C','D','E','F','G','H']
-
-def connected(xs, ys):
+def connected(xs: Iterable[T], ys: Iterable[T]) -> bool:
+    """
+    Is some member of `ys` in `xs`?
+    """
     xs = set(xs)
     for y in ys:
         if y in xs:
             return True
     return False
 
-def uses_in_order(xs, ys):
+
+def uses_in_order(xs: Iterable[str], ys: Iterable[str]) -> bool:
+    """
+    Are the variables in `xs` union `ys` used in order?
+    """
     zs = set(xs) | set(ys)
     for i in all_myvars[:len(zs)]:
         if i not in zs:
             return False
     return True
 
-def build_props(settings, arities, tester=None):
+
+def build_props(settings: Settings, arities: Iterable[int]) -> Tuple[Any, Any]:
 
     myvars = all_myvars[:settings.max_vars]
 
-    pairs = set()
-    for a1 in arities:
-        xs = tuple(myvars[:a1])
-        xs_set = set(xs)
-        for a2 in arities:
-            for ys in permutations(myvars,a2):
-                if not connected(xs, ys):
-                    continue
-                if not uses_in_order(xs, ys):
-                    continue
-                # pairs.append((xs, ys))
-                pairs.add(tuple(sorted([xs, ys])))
+    def make_pairs() -> List[Tuple[Tuple[str, ...], Tuple[str, ...]]]:
+        pairs: set[Tuple[Tuple[str, ...], Tuple[str, ...]]] = set()
+        for a1 in arities:
+            xs: Tuple[str, ...] = tuple(myvars[:a1])
+            ys: Tuple[str, ...]
+            for a2 in arities:
+                for ys in permutations(myvars, a2):
+                    if not connected(xs, ys):
+                        continue
+                    if not uses_in_order(xs, ys):
+                        continue
+                    pairs.add(cast(Tuple[Tuple[str, ...], Tuple[str, ...]],
+                              tuple(sorted([xs, ys]))))
+        return sorted(pairs)
 
-    # print('pairs1')
-    # for x in pairs:
-    #     print(x)
+    pairs = make_pairs()
+    # with open("/tmp/pairs.txt", 'w') as fp:
+    #     for xs, ys in pairs:
+    #         print(f"xs = {xs}, ys = {ys}", file=fp)
 
-    # print('len(pairs)',len(pairs))
+    # pairs2 appears to be a subset of pairs with some redundancies
+    # (based on equivalent namings), removed.
+    pairs2: set[Tuple[Tuple[str, ...], Tuple[str, ...]]] = set()
 
-    pairs = sorted(pairs)
-    pairs2 = set()
-    for xs, ys in pairs:
-        lookup = {}
-        def tmp(vs, next_var):
-            out = []
-            for v in vs:
-                if v not in lookup:
-                    lookup[v] = next_var
-                    next_var+=1
-                k = lookup[v]
-                out.append(chr(ord('A') + k))
-            return tuple(out), next_var
-        var_count = 0
-        out_xs, var_count = tmp(xs, var_count)
-        out_ys, var_count = tmp(ys, var_count)
-        # out_zs, var_count = tmp(zs, var_count)
-        pairs2.add((out_xs, out_ys))
+    def make_pairs2() -> None:
+        lookup: Dict[str, int]
+        for xs, ys in pairs:
+            lookup = {}
 
-    # for x in set(pairs) - pairs2:
-        # print('bad',x)
+            def tmp(vs: Tuple[str, ...], next_var: int) -> Tuple[Tuple[str, ...], int]:
+                out = []
+                for v in vs:
+                    if v not in lookup:
+                        lookup[v] = next_var
+                        next_var += 1
+                    k = lookup[v]
+                    out.append(chr(ord('A') + k))
+                return tuple(out), next_var
 
-    # for x in pairs2:
-        # print('good',x)
-    # print('len(pairs2)',len(pairs2))
+            var_count = 0
+            out_xs, var_count = tmp(xs, var_count)
+            out_ys, var_count = tmp(ys, var_count)
+            # out_zs, var_count = tmp(zs, var_count)
+            pairs2.add((out_xs, out_ys))
 
-    pairs3 = set()
-    for xs, ys in pairs2:
-        lookup = {}
-        def tmp(vs, next_var):
-            out = []
-            for v in vs:
-                if v not in lookup:
-                    lookup[v] = next_var
-                    next_var+=1
-                k = lookup[v]
-                out.append(chr(ord('A') + k))
-            return tuple(out), next_var
-        var_count = 0
+    make_pairs2()
 
-        zs = sorted([xs, ys], key=lambda x: len(x), reverse=True)
-        # xs1, ys1 = xs, ys
-        xs, ys = zs
-        out_xs, var_count = tmp(xs, var_count)
-        out_ys, var_count = tmp(ys, var_count)
-        # out_zs, var_count = tmp(zs, var_count)
-        k = (out_xs, out_ys)
-        pairs3.add(k)
+    # with open("/tmp/pairs2.txt", 'w') as fp:
+    #     for xs, ys in pairs2:
+    #         print(f"xs = {xs}, ys = {ys}", file=fp)
+    # print(f"length of pairs2 is {len(pairs2)}")
 
-    # for x in pairs2 - pairs3:
-        # print('bad3', x)
+    # swap xs and ys if ys are longer than xs
+    def make_pairs3() -> set[Tuple[Tuple[str, ...], Tuple[str, ...]]]:
+        lookup: Dict[str, int]
+        pair3_count = 0
+        pairs3 = set()
+        for xs, ys in pairs2:
+            lookup = {}
 
-    # for x in pairs3:
-        # print('good', x)
+            def tmp(vs: Tuple[str, ...], next_var: int) -> Tuple[Tuple[str, ...], int]:
+                out = []
+                for v in vs:
+                    if v not in lookup:
+                        lookup[v] = next_var
+                        next_var += 1
+                    k = lookup[v]
+                    out.append(chr(ord('A') + k))
+                # print(f"Transforming {vs} to {tuple(out)}")
+                return tuple(out), next_var
 
-    # print('len(pairs3)',len(pairs3))
+            var_count = 0
+            # swap xs and ys if xs are shorter than ys.
+            if len(ys) > len(xs):
+                x, y = ys, xs
+            else:
+                x, y = xs, ys
+            out_xs, var_count = tmp(x, var_count)
+            out_ys, var_count = tmp(y, var_count)
+            # print(f"Before adding {out_xs, out_ys}, pairs3 has {len(pairs3)} elements.")
+            k = (out_xs, out_ys)
+            pairs3.add(k)
+            # print(f"After adding {k}, pairs3 has {len(pairs3)} elements.")
+            pair3_count += 1
+        # print(f"Have added {pair3_count} entries to pairs3")
+        # print(f"Length of pairs3 is {len(pairs3)}")
+        return pairs3
 
-    # print('implies_not2', len(pairs3))
+    pairs3 = make_pairs3()
+    # print(f"After return, length of pairs3 is {len(pairs3)}")
+
+    # with open("/tmp/pairs3.txt", 'w') as fp:
+    #     for xs, ys in pairs3:
+    #         print(f"xs = {xs}, ys = {ys}", file=fp)
+
     props = []
     cons = []
     for xs, ys in pairs3:
@@ -195,7 +200,6 @@ def build_props(settings, arities, tester=None):
         l2 = f'{key}_aux((P,Q)):- {sym_con} body_pred(P,{len(xs)}), body_pred(Q,{len(ys)}), type(P,({t_left})), type(Q,({t_right})), holds(P,({atom_left})), holds(Q,({atom_right})).'
         props.extend([l1, l2])
 
-
         con1 = f':- prop({key},(P,Q)), body_literal(Rule,P,_,({atom_left})), body_literal(Rule,Q,_,({atom_right})).'
         cons.append(con1)
 
@@ -218,27 +222,34 @@ def build_props(settings, arities, tester=None):
 
         # rule_vars = xs_set | ys_set
         rule_vars = ys_set
+        assert rule_vars, \
+            f"Must be rule vars to generate constraint from xs = {xs} and ys = {ys}"
         checker = ','.join(f'valid_var(Rule,{v})' for v in rule_vars)
         con1 = f':- prop({key},(P,Q)), body_literal(Rule,P,_,({atom_left})), body_literal(Rule,Q,_,({atom_right})), {checker}.'
         # con1 = f':- prop({key},(P,Q)), body_literal(Rule,P,_,({atom_left})), body_literal(Rule,Q,_,({atom_right})).'
         # print(con1)
         cons.append(con1)
 
-
-
     return props, cons
 
-def has_unordered_vars(xs, ys):
+
+def has_unordered_vars(xs: List[str], ys: List[str]) -> bool:
+    """
+    Check to see if the set of variables, `xs` union `ys` contains
+    unordered variables.
+    """
     lookup = {}
-    def tmp(vs, next_var):
+
+    def tmp(vs: Iterable[str], next_var: int) -> Tuple[Tuple[str, ...], int]:
         out = []
         for v in vs:
             if v not in lookup:
                 lookup[v] = next_var
-                next_var+=1
+                next_var += 1
             k = lookup[v]
             out.append(chr(ord('A') + k))
         return tuple(out), next_var
+
     var_count = 0
     out_xs, var_count = tmp(xs, var_count)
     out_ys, var_count = tmp(ys, var_count)
@@ -246,150 +257,18 @@ def has_unordered_vars(xs, ys):
     z2 = tuple(sorted([out_xs, out_ys]))
     return z1 != z2
 
-# def build_props_new(settings, arities, tester=None):
 
-#     myvars = all_myvars[:settings.max_vars]
+def rename_variables(xs: Iterable[str], ys: Iterable[str]) -> Tuple[str, str]:
+    lookup: Dict[str, int] = {}
 
-#     arities = sorted(arities, reverse=True)
-
-#     pairs = set()
-#     for a1 in arities:
-#         xs = tuple(myvars[:a1])
-#         xs_set = set(xs)
-#         # print(xs)
-#         for a2 in arities:
-#             for ys in permutations(myvars,a2):
-#                 # print('\t',ys)
-#                 if not connected(xs, ys):
-#                     continue
-#                 if not uses_in_order(xs, ys):
-#                     continue
-#                 if has_unordered_vars(xs, ys):
-#                     continue
-#                 z = tuple(sorted([xs, ys]))
-#                 # print(z)
-#                 pairs.add(z)
-
-#     pairs3 = set()
-#     for xs, ys in pairs:
-#         lookup = {}
-#         def tmp(vs, next_var):
-#             out = []
-#             for v in vs:
-#                 if v not in lookup:
-#                     lookup[v] = next_var
-#                     next_var+=1
-#                 k = lookup[v]
-#                 out.append(chr(ord('A') + k))
-#             return tuple(out), next_var
-#         var_count = 0
-
-#         zs = sorted([xs, ys], key=lambda x: len(x), reverse=True)
-#         # xs1, ys1 = xs, ys
-#         xs, ys = zs
-#         out_xs, var_count = tmp(xs, var_count)
-#         out_ys, var_count = tmp(ys, var_count)
-#         # out_zs, var_count = tmp(zs, var_count)
-#         k = (out_xs, out_ys)
-#         pairs3.add(k)
-
-#     # for x in pairs - pairs3:
-#     #     print('bad3', x)
-
-#     # for x in pairs3:
-#     #     print('good', x)
-
-#     # print('len(pairs)',len(pairs))
-#     # print('len(pairs3)',len(pairs3))
-
-#     # print('implies_not2', len(pairs3))
-#     props = []
-#     cons = []
-#     for xs, ys in pairs3:
-#         xs_set = set(xs)
-#         ys_set = set(ys)
-
-#         left = ''.join(x.lower() for x in xs)
-#         right = ''.join(y.lower() for y in ys)
-
-#         t_left = ','.join(f'T{x}' for x in xs)
-#         t_right = ','.join(f'T{y}' for y in ys)
-
-#         zs = []
-#         for y in ys:
-#             if y not in xs_set:
-#                 zs.append('_')
-#             else:
-#                 zs.append(y)
-
-#         atom_left = ','.join(xs)
-#         atom_right = ','.join(zs)
-
-#         if len(xs) == 1:
-#             t_left += ','
-#             atom_left += ','
-#         if len(ys) == 1:
-#             t_right += ','
-#             atom_right += ','
-
-#         # # IMPLIES NOT
-#         # key = f'not_{left}_implies_{right}'
-#         key = f'not_{left}_{right}'
-
-
-
-#         # if the vars are identical then remove symmetries
-#         sym_con = ''
-#         if xs == ys:
-#             sym_con = 'P<Q,'
-
-#         l1 = f'prop({key},(P,Q)):- {sym_con} body_pred(P,{len(xs)}), body_pred(Q,{len(ys)}), type(P,({t_left})), type(Q,({t_right})), holds(P,({atom_left})), not {key}_aux((P,Q)).'
-#         l2 = f'{key}_aux((P,Q)):- {sym_con} body_pred(P,{len(xs)}), body_pred(Q,{len(ys)}), type(P,({t_left})), type(Q,({t_right})), holds(P,({atom_left})), holds(Q,({atom_right})).'
-#         props.extend([l1, l2])
-
-
-#         con1 = f':- prop({key},(P,Q)), body_literal(Rule,P,_,({atom_left})), body_literal(Rule,Q,_,({atom_right})).'
-#         cons.append(con1)
-
-#         if not ys_set.issubset(xs_set):
-#             continue
-
-#         # IMPLIES
-#         key = f'{left}_{right}'
-
-
-#         # if the vars are identical then remove symmetries
-#         sym_con = ''
-#         if xs == ys:
-#             sym_con = 'P!=Q,'
-
-#         l1 = f'prop({key},(P,Q)):- {sym_con} body_pred(P,{len(xs)}), body_pred(Q,{len(ys)}), type(P,({t_left})), type(Q,({t_right})), holds(P,({atom_left})), holds(Q,({atom_right})), not {key}_aux((P,Q)).'
-#         l2 = f'{key}_aux((P,Q)):- {sym_con} body_pred(P,{len(xs)}), body_pred(Q,{len(ys)}), type(P,({t_left})), type(Q,({t_right})), holds(P,({atom_left})), not holds(Q,({atom_right})).'
-#         props.extend([l1, l2])
-
-
-#         # rule_vars = xs_set | ys_set
-#         rule_vars = ys_set
-#         checker = ','.join(f'var_appears_more_than_twice(Rule,{v})' for v in rule_vars)
-#         con1 = f':- prop({key},(P,Q)), body_literal(Rule,P,_,({atom_left})), body_literal(Rule,Q,_,({atom_right})), {checker}.'
-#         # con1 = f':- prop({key},(P,Q)), body_literal(Rule,P,_,({atom_left})), body_literal(Rule,Q,_,({atom_right})).'
-#         # print(con1)
-#         cons.append(con1)
-
-
-
-#     return props, cons
-
-def rename_variables(xs, ys):
-    lookup = {}
-    def tmp(vs, next_var):
+    def tmp(vs: Iterable[str], next_var: int) -> Tuple[Tuple[str, ...], int]:
         # print(type(vs), vs)
         # exit()
         out = []
         for v in vs:
             if v not in lookup:
                 lookup[v] = next_var
-                next_var+=1
+                next_var += 1
             k = lookup[v]
             out.append(chr(ord('A') + k))
         return tuple(out), next_var
@@ -397,99 +276,104 @@ def rename_variables(xs, ys):
     xs, var_count = tmp(xs, var_count)
     ys, var_count = tmp(ys, var_count)
     # xs, ys = sorted([xs, ys], key=lambda x: len(x), reverse=True)
-    xs = ''.join(x.lower() for x in xs)
-    ys = ''.join(y.lower() for y in ys)
-    return xs, ys
+    new_xs = ''.join(x.lower() for x in xs)
+    new_ys = ''.join(y.lower() for y in ys)
+    return new_xs, new_ys
 
 
-def build_props2(settings, arities):
-    premise1 = []
+def build_props2(settings: Settings, arities: Iterable[int]) -> Tuple[List[str], List[str]]:
+    """
+    Based on `settings` and `arities`, return a list of propositions and a list of constraints.
+    """
+    # premise1 = []
 
     arities = [x for x in arities if x < 3]
     # arities = [x for x in arities if x < 2]
 
     myvars = all_myvars[:settings.max_vars]
 
-    pairs = []
-    for a1 in arities:
-        xs = tuple(myvars[:a1])
-        # xs_set = set(xs)
-        for a2 in arities:
-            for ys in permutations(myvars,a2):
-                if not connected(xs, ys):
-                    continue
-                if not uses_in_order(xs, ys):
-                    continue
-                xs_ys = set(xs) | set(ys)
-                for a3 in arities:
-                    for zs in permutations(myvars,a3):
-                        if not connected(xs_ys, zs):
-                            continue
-                        if not uses_in_order(xs_ys, zs):
-                            continue
-                        # print(xs,ys,zs)
-                        # TODO: RENAME VARIABLES
-                        pairs.append((xs, ys, zs))
+    triples_list: List[Tuple[Tuple[str, ...], Tuple[str, ...], Tuple[str, ...]]] = []
+
+    def make_triples_list() -> None:
+        for a1 in arities:
+            xs = tuple(myvars[:a1])
+            # xs_set = set(xs)
+            for a2 in arities:
+                for ys in permutations(myvars, a2):
+                    if not connected(xs, ys):
+                        continue
+                    if not uses_in_order(xs, ys):
+                        continue
+                    xs_ys = set(xs) | set(ys)
+                    for a3 in arities:
+                        for zs in permutations(myvars, a3):
+                            if not connected(xs_ys, zs):
+                                continue
+                            if not uses_in_order(xs_ys, zs):
+                                continue
+                            # print(xs,ys,zs)
+                            # TODO: RENAME VARIABLES
+                            triples_list.append((xs, ys, zs))
+
+    make_triples_list()
 
     # for x in pairs:
     #     print(x)
-    pairs2 = set()
-    for xs, ys, zs in pairs:
-        lookup = {}
-        def tmp(vs, next_var):
-            out = []
-            for v in vs:
-                if v not in lookup:
-                    lookup[v] = next_var
-                    next_var+=1
-                k = lookup[v]
-                out.append(chr(ord('A') + k))
-            return tuple(out), next_var
-        var_count = 0
-        xs, ys, zs = sorted([xs, ys, zs], key=lambda x: len(x), reverse=True)
-        out_xs, var_count = tmp(xs, var_count)
-        out_ys, var_count = tmp(ys, var_count)
-        out_zs, var_count = tmp(zs, var_count)
-        pairs2.add((out_xs, out_ys, out_zs))
+    triples2 = set()
 
+    def make_triples2() -> None:
+        lookup: dict[str, int]
+        for xs, ys, zs in triples_list:
+            lookup = {}
 
-    seen = set()
-    seen_map = {}
-    pairs3 = set()
+            def tmp(vs: Iterable[str], next_var: int) -> Tuple[Tuple[str, ...], int]:
+                out = []
+                for v in vs:
+                    if v not in lookup:
+                        lookup[v] = next_var
+                        next_var += 1
+                    k = lookup[v]
+                    out.append(chr(ord('A') + k))
+                return tuple(out), next_var
+            var_count = 0
+            xs, ys, zs = sorted([xs, ys, zs], key=lambda x: len(x), reverse=True)
+            out_xs, var_count = tmp(xs, var_count)
+            out_ys, var_count = tmp(ys, var_count)
+            out_zs, var_count = tmp(zs, var_count)
+            triples2.add((out_xs, out_ys, out_zs))
 
+    make_triples2()
 
+    Triple = Tuple[Tuple[str, ...], Tuple[str, ...], Tuple[str, ...]]
+    seen_map: dict[Tuple[frozenset[Tuple[str, ...]], Tuple[str, ...]], Triple] = {}
 
-    for xs, ys, zs in pairs2:
-        k = (frozenset((xs, ys)), zs)
-        if k in seen:
-            # print('match')
+    triples3 = set()
+
+    def make_triples3() -> None:
+        seen: set[Tuple[frozenset[Tuple[str, ...]], Tuple[str, ...]]] = set()
+        for xs, ys, zs in triples2:
+            k: Tuple[frozenset[Tuple[str, ...]], Tuple[str, ...]] = \
+                frozenset((xs, ys)), zs
+            if k in seen:
+                # print('match')
+                # print(xs, ys, zs)
+                # print(seen_map[k])
+                continue
+            seen.add(k)
+            seen_map[k] = (xs, ys, zs)
+
+            # if len(xs) > len(ys):
+            #     # print('1', xs, ys, zs)
+            #     continue
+            # else:
             # print(xs, ys, zs)
-            # print(seen_map[k])
-            continue
-        seen.add(k)
-        seen_map[k] = (xs, ys, zs)
+            triples3.add((xs, ys, zs))
 
-        # if len(xs) > len(ys):
-        #     # print('1', xs, ys, zs)
-        #     continue
-        # else:
-        # print(xs, ys, zs)
-        pairs3.add((xs, ys, zs))
+    make_triples3()
 
-    # for x in sorted(pairs3):
-        # print(x)
-    # print('p1',len(pairs))
-    # print('p2',len(pairs2))
-    # print('p3',len(pairs3))
-    pairs = pairs2
-    # for x in sorted(pairs2):
-    #     print(x)
-    # print(len(pairs))
-    # print(len(pairs2))
-    # for x in pairs:
-        # print(x)
-    props = []
-    cons = []
+    pairs = triples2
+    props: List[str] = []
+    cons: List[str] = []
     seen = set()
     for xs, ys, zs in pairs:
         xs_set = set(xs)
@@ -504,19 +388,17 @@ def build_props2(settings, arities):
         t2 = ','.join(f'T{y}' for y in ys)
         t3 = ','.join(f'T{z}' for z in zs)
 
-
-        smoothed = []
+        smoother = []
         xs_ys_set = xs_set | ys_set
         for z in zs:
             if z not in xs_ys_set:
-                smoothed.append('_')
+                smoother.append('_')
             else:
-                smoothed.append(z)
+                smoother.append(z)
 
-        smoothed = ','.join(smoothed)
+        smoothed = ','.join(smoother)
         if len(zs) == 1:
             smoothed += ','
-
 
         atom1 = ','.join(xs)
         atom2 = ','.join(ys)
@@ -536,8 +418,6 @@ def build_props2(settings, arities):
         key = f'not_{a1}_{a2}_{a3}'
 
         if frozenset([a1, a2, a3]) in seen:
-            pass
-            # print('skip')
             continue
         seen.add(frozenset([a1, a2, a3]))
 
@@ -552,9 +432,7 @@ def build_props2(settings, arities):
         if ys == zs:
             sym_con += 'Q<R,'
 
-
-
-        aux_key = f'{key}_subsumed'
+        aux_key: str = f'{key}_subsumed'
         aux1 = f'{aux_key}(P,Q,R):- body_pred(P,_), body_pred(Q,_), body_pred(R,_), prop(not_{a1}_{a2},(P,Q)).'
         aux2 = f'{aux_key}(P,Q,R):- body_pred(P,_), body_pred(Q,_), body_pred(R,_), prop(not_{a1}_{a3},(P,R)).'
         aux3 = f'{aux_key}(P,Q,R):- body_pred(P,_), body_pred(Q,_), body_pred(R,_), prop(not_{a2}_{a3},(Q,R)).'
@@ -615,23 +493,28 @@ def build_props2(settings, arities):
     props = sorted(list(set(props)))
     return props, cons
 
-def arg_to_symbol(arg):
+
+def arg_to_symbol(arg: tuple | numbers.Number | str) -> clingo.Symbol:
     if isinstance(arg, tuple):
         return Tuple_(tuple(arg_to_symbol(a) for a in arg))
     if isinstance(arg, numbers.Number):
-        return Number(arg)
+        if isinstance(arg, int):
+            return Number(arg)
+        raise TypeError(f"Got Number {arg} to translate to clingo Number, but clingo Numbers must be integers.")
     if isinstance(arg, str):
         return Function(arg)
-    assert False, f'Unhandled argtype({type(arg)}) in aspsolver.py arg_to_symbol()'
+    raise TypeError(f'Unhandled argtype({type(arg)}) in aspsolver.py arg_to_symbol()')
 
-def atom_to_symbol(pred, args):
+
+def atom_to_symbol(pred: str, args: Iterable[tuple | numbers.Number | str]) -> clingo.Symbol:
     xs = tuple(arg_to_symbol(arg) for arg in args)
     return Function(name = pred, arguments = xs)
 
-def deduce_bk_cons(settings, tester):
+
+def deduce_bk_cons(settings: Settings) -> List[str]:
     prog = []
-    lookup2 = {k: f'({v})' for k,v in tmp_map.items()}
-    lookup1 = {k:v for k,v in lookup2.items()}
+    lookup2 = {k: f'({v})' for k, v in tmp_map.items()}
+    lookup1 = {k: v for k, v in lookup2.items()}
     lookup1[1] = '(V0,)'
     head_pred, head_args = settings.head_literal
     head_arity = len(head_args)
@@ -668,41 +551,39 @@ def deduce_bk_cons(settings, tester):
 
     # type_encoding = set()
     if settings.head_types:
-        types = tuple(settings.head_types)
-        prog.append(f'type({settings.head_literal[0]},{types}).')
+        type_tuple = tuple(settings.head_types)
+        prog.append(f'type({settings.head_literal[0]},{type_tuple}).')
 
-        for pred, types in settings.body_types.items():
-            types = tuple(types)
-            prog.append(f'type({pred},{types}).')
+        for p, t in settings.body_types.items():
+            type_tuple = tuple(t)
+            prog.append(f'type({p},{type_tuple}).')
         # encoding.extend(type_encoding)
 
-    prog = '\n'.join(prog)
+    prog_str = '\n'.join(prog)
 
     with open(settings.bk_file) as f:
         bk = f.read()
 
+    bk = bk.replace('\\+', 'not')
 
-    # cons = pkg_resources.resource_string(__name__, "lp/cons.pl").decode()
-    bk = bk.replace('\\+','not')
-
-    new_props1, new_cons1 = build_props(settings, arities, tester)
+    new_props1, new_cons1 = build_props(settings, arities)
     new_props2, new_cons2 = build_props2(settings, arities)
 
-    new_props = new_props1 + new_props2
-    new_cons = new_cons1 + new_cons2
+    new_props_list: List[str] = new_props1 + new_props2
+    new_cons: List[str] = new_cons1 + new_cons2
 
     # print('\n'.join(new_cons))
 
-    new_props = '\n'.join(new_props)
-    encoding = [prog, bk, TIDY_OUTPUT, new_props]
+    new_props = '\n'.join(new_props_list)
+    encoding_list = [prog_str, bk, TIDY_OUTPUT, new_props]
 
-    if settings.head_types == None:
+    if settings.head_types is None:
         if head_arity == 1:
             types = '(t,)'
         else:
             # print('head_arity', head_arity)
-            types = tuple(['t'] * head_arity)
-        encoding.append(f'type({head_pred},{types}).')
+            types = str(tuple(['t'] * head_arity))
+        encoding_list.append(f'type({head_pred},{types}).')
 
     if len(settings.body_types) == 0:
         # exit()
@@ -710,44 +591,40 @@ def deduce_bk_cons(settings, tester):
             if a == 1:
                 types = '(t,)'
             else:
-                types = tuple(['t'] * a)
+                types = str(tuple(['t'] * a))
 
-            encoding.append(f'type({p},{types}).')
+            encoding_list.append(f'type({p},{types}).')
 
-
-    encoding = '\n'.join(encoding)
-    # print(encoding)
-    # with open('bkcons-encoding.pl', 'w') as f:
-        # f.write(encoding)
-    # exit()
+    encoding = '\n'.join(encoding_list)
     solver = clingo.Control(['-Wnone'])
     solver.add('base', [], encoding)
     solver.ground([('base', [])])
     out = set()
 
-    implies_not = []
+    # implies_not = []
 
     with solver.solve(yield_=True) as handle:
         for m in handle:
             for atom in m.symbols(shown = True):
-                args = atom.arguments
+                # args = atom.arguments
                 if atom.name == 'prop':
                     out.add(str(atom))
-    xs = [x + '.' for x in out]
+    xs: List[str] = [x + '.' for x in out]
     return xs + new_cons
 
 
-def generate_binary_strings(bit_count):
-    return list(product((0,1), repeat=bit_count))[1:-1]
+def generate_binary_strings(bit_count: int) -> List[Tuple[Bit, ...]]:
+    return list(cast(Iterable[Tuple[Bit, ...]], product((0,1), repeat=bit_count)))[1:-1]
 
-def deduce_recalls(settings):
+
+# pylint: disable=too-many-branches,too-many-statements, broad-exception-caught
+def deduce_recalls(settings: Settings) -> List[str] | None:
     # Jan Struyf, Hendrik Blockeel: Query Optimization in Inductive Logic Programming by Reordering Literals. ILP 2003: 329-346
 
-    counts = {}
-    counts_all = {}
+    counts: Dict[str, Dict[Tuple[Bit, ...], Dict[Tuple, set]]] = {}
+    counts_all: Dict[str, int] = {}
 
     try:
-
         with open(settings.bk_file) as f:
             bk = f.read()
         solver = clingo.Control(['-Wnone'])
@@ -763,67 +640,66 @@ def deduce_recalls(settings):
         counts_all[pred] = 0
         counts[pred] = {}
         d = counts[pred]
-        binary_strings = generate_binary_strings(arity)
-
+        binary_strings: List[Tuple[Bit, ...]] = generate_binary_strings(arity)
+        var_subset: Tuple[Bit, ...]
         for var_subset in binary_strings:
             d[var_subset] = defaultdict(set)
 
         for atom in solver.symbolic_atoms.by_signature(pred, arity=arity):
-            counts_all[pred] +=1
+            counts_all[pred] += 1
 
-            args = list(map(str, atom.symbol.arguments))
+            args: List[str] = list(map(str, atom.symbol.arguments))
 
             for var_subset in binary_strings:
-                key = []
-                value = []
+                key: List[str] = []
+                value: List[str] = []
                 for i in range(arity):
                     if var_subset[i]:
                         key.append(args[i])
                     else:
                         value.append(args[i])
-                key = tuple(key)
-                value = tuple(value)
-                d[var_subset][key].add(value)
+                tkey = tuple(key)
+                tvalue = tuple(value)
+                d[var_subset][tkey].add(tvalue)
 
     # we now calculate the maximum recall
-    all_recalls = {}
+    all_recalls: Dict[Tuple[str, Tuple[int, ...]], int] = {}
     recall: int
     for pred, arity in settings.body_preds:
         d1 = counts[pred]
         all_recalls[(pred, (0,)*arity)] = counts_all[pred]
-        for args, d2 in d1.items():
+        for args2, d2 in d1.items():
             try:
                 recall = max(len(xs) for xs in d2.values())
             except ValueError:
                 settings.logger.error(f"Failed to recall consequences of body predicate {pred}/{arity}")
                 settings.logger.error("Setting recall count to 0 and continuing")
                 recall = 0
-            # print(pred, args, recall)
-            all_recalls[(pred, args)] = recall
+            # print(pred, args2, recall)
+            all_recalls[(pred, args2)] = recall
 
-    # settings.recall = all_recalls
-    settings.recall = settings.recall | all_recalls
+    settings.recall = cast(dict[Tuple[str, Tuple[Bit, ...]], int], settings.recall | all_recalls)
 
     # for k, v in sorted(settings.recall.items()):
         # print(k ,v)
 
     out = []
 
-    for (pred, key), recall in all_recalls.items():
+    for (pred, val), recall in all_recalls.items():
         if recall > 4:
             continue
-        if 1 not in key:
+        if 1 not in val:
             pass
-        arity = len(key)
+        arity = len(val)
         args = [f'V{i}' for i in range(arity)]
         args_str = ','.join(args)
 
         if len(args) == 1:
-            args_str +=  ','
+            args_str += ','
         subset = []
         fixer = []
 
-        for x, y in zip(key, args):
+        for x, y in zip(val, args):
             if x == 0:
                 subset.append(y)
                 fixer.append('_')
@@ -833,13 +709,14 @@ def deduce_recalls(settings):
         subset_str = ','.join(subset)
         fixer_str = ','.join(fixer)
         if len(fixer) == 1:
-            fixer_str+= ','
+            fixer_str += ','
         con2 = f':- body_literal(Rule,{pred},_,({fixer_str})), #count{{{subset_str}: body_literal(Rule,{pred},_,({args_str}))}} > {recall}.'
         out.append(con2)
 
     return out
 
-def deduce_type_cons(settings):
+
+def deduce_type_cons(settings: Settings) -> Iterator[str]:
 
     body_types = settings.body_types
 
@@ -856,7 +733,7 @@ def deduce_type_cons(settings):
 
     for pred, arity in settings.body_preds:
         for atom in solver.symbolic_atoms.by_signature(pred, arity=arity):
-            args = []
+            # args = []
             for i in range(arity):
                 arg = atom.symbol.arguments[i]
                 x = str(arg)
@@ -873,7 +750,8 @@ def deduce_type_cons(settings):
         # print(con)
         yield con
 
-SINGLETON_ENCODING="""
+
+SINGLETON_ENCODING = """
 #show total/2.
 #show total2/3.
 #show total3/4.
@@ -960,9 +838,9 @@ total4(P, I1, I2, I3, I4):-
     not not_total4(P, I1, I2, I3, I4).
 """
 
-def deduce_non_singletons(settings):
-    encoding = []
 
+def deduce_non_singletons(settings: Settings) -> List[str]:
+    encoding: List[str] = []
 
     if len(settings.body_types) == 0:
         return []
@@ -1011,21 +889,20 @@ def deduce_non_singletons(settings):
         bk = f.read()
 
     encoding.append(bk)
-    encoding = '\n'.join(encoding)
+    encoding_str = '\n'.join(encoding)
 
     # with open('TOTAL', 'w') as f:
         # f.write(encoding)
 
     solver = clingo.Control(['-Wnone'])
-    solver.add('base', [], encoding)
+    solver.add('base', [], encoding_str)
     solver.ground([('base', [])])
 
     cons = []
 
     pred_lookup = {p:a for p,a in settings.body_preds}
 
-
-    seen = defaultdict(set)
+    seen: Dict[str, set[frozenset[str]]] = defaultdict(set)
     for atom in solver.symbolic_atoms.by_signature('total4', arity=5):
         p = str(atom.symbol.arguments[0])
         i = int(atom.symbol.arguments[1].number)

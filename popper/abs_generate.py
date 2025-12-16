@@ -9,13 +9,42 @@ from .type_defs import Literal, RuleBase, Rule
 if TYPE_CHECKING:
     from .util import Settings
 
-
 class Generator(abc.ABC):
     settings: "Settings"
     solver: clingo.Control
     handle: Optional[Iterator[clingo.Model]]
+    clingo_handle: Optional[clingo.solving.SolveHandle]
     model: Optional[clingo.Model]
     cached_clingo_atoms: Dict[int, clingo.Symbol] # hash of literal to clingo Symbol
+
+    def set_handle(self, reset: bool = False) -> None:
+        """
+        Reset the Generator's paired Clingo handles.
+        Parameters
+        ----------
+        reset: bool, optional
+           Whether to reset the handles (i.e., reset the search).  If true,
+           then make new `handle` and `clingo_handle` for the generator.
+           Otherwise (the default), only make new handles if the handles
+           are not already set.
+        """
+        # NOTE: Not sure whether this should reset self.model when
+        # resetting the handles
+        if self.handle is None or reset:
+            clingo_handle = self.solver.solve(yield_=True)
+            self.clingo_handle = clingo_handle
+            self.handle = iter(clingo_handle)
+        else:
+            assert self.clingo_handle is not None, \
+                "This generator's model iterator is bound, but not the corresponding clingo handle."
+
+    def __init__(self, settings: "Settings") -> None:
+        self.savings = 0
+        self.settings = settings
+        self.cached_clingo_atoms = {}
+        self.handle = None
+        self.clingo_handle = None
+        self.model = None
 
     @abc.abstractmethod
     def get_prog(self) -> Optional[RuleBase]:
