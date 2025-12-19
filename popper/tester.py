@@ -6,7 +6,7 @@ from collections import defaultdict
 from contextlib import contextmanager
 from functools import cache
 from itertools import product
-from typing import Any, Dict, Optional, cast, Tuple
+from typing import Any, Collection, Dict, Iterable, Iterator, Optional, cast, Tuple, TypedDict, TypeAlias, Literal as TypingLiteral
 from bitarray import bitarray, frozenbitarray
 from bitarray.util import ones
 from janus_swi import query_once, consult, cmd
@@ -15,31 +15,34 @@ from janus_swi.janus import PrologError
 from .util import Literal, calc_prog_size, calc_rule_size, format_rule, order_prog, prog_hash, prog_is_recursive, \
     Settings
 from .resources import resource_filename, close_resource_file
+from .type_defs import RuleBase, Rule
 
-logger: Optional[logging.Logger] = None
+logger: logging.Logger = logging.getLogger()
 
-def format_literal_janus(literal):
-    args = ','.join(f'_V{i}' for i in literal.arguments)
-    return f'{literal.predicate}({args})'
+class QueryOnceReturn(TypedDict, total=False):
+    truth: bool
+
+def format_literal_janus(literal: Tuple[str, Tuple[int, ...]]) -> str:
+    args = ','.join(f'_V{i}' for i in literal[1])
+    return f'{literal[0]}({args})'
 
 class PopperTesterError(Exception):
     pass
 
 class Tester:
     settings: Settings
-
-    settings: Settings
     cached_pos_covered: Dict[int, frozenbitarray]
     neg_fact_str: str
     neg_literal_set: frozenset
     module_name: str
 
-    def __init__(self, settings):
-        global logger
+    def __init__(self, settings: Settings) -> None:
+        # global logger
         self.settings = settings
         self.module_name = module_name = 'popper_tester_module_' + datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
 
-        logger = self.settings.logger
+        # use specific logger for Tester
+        # logger = self.settings.logger
 
         bk_pl_path = self.settings.bk_file
         exs_pl_path = self.settings.ex_file
@@ -62,15 +65,20 @@ class Tester:
             self.consult(x)
             close_resource_file(x)
 
-        self.query_once('load_examples')
+        self.query_once('load_examples', error_on_failure=True)
 
-        neg_literal = Literal('neg_fact', tuple(range(len(self.settings.head_literal.arguments))))
+        # at this point we should have pos_index/2 defined
+        self.query_once('current_predicate(neg_index/2)', error_on_failure=True)
+        self.query_once('current_predicate(pos_index/2)', error_on_failure=True)
+
+        neg_literal: Tuple[str, Tuple[int, ...]] = ('neg_fact', tuple(range(len(self.settings.head_literal.arguments))))
         self.neg_fact_str = format_literal_janus(neg_literal)
         self.neg_literal_set = frozenset([neg_literal])
+        logger.debug("Have added %d negative facts.", len(neg_literal))
 
         q = 'findall(_Atom2, (neg_index(_K, _Atom1), term_string(_Atom1, _Atom2)), S)'
-        res = self.query_once(q)['S']
-        atoms = []
+        res: list[str] = self.query_once(q)['S'] # type: ignore
+        atoms: list[list[str]] = []
         for x in res:
             x = x[:-1].split('(')[1].split(',')
             atoms.append(x)
@@ -82,8 +90,8 @@ class Tester:
                 logger.error("Error finding recall: %s: %s", type(e), e)
                 logger.error("Traceback:\n%s", "".join(traceback.format_exception(e)))
 
-        self.num_pos = self.query_once('findall(_K, pos_index(_K, _Atom), _S), length(_S, N)')['N']
-        self.num_neg = self.query_once('findall(_K, neg_index(_K, _Atom), _S), length(_S, N)')['N']
+        self.num_pos = self.query_once('findall(_K, pos_index(_K, _Atom), _S), length(_S, N)')['N'] # type: ignore
+        self.num_neg = self.query_once('findall(_K, neg_index(_K, _Atom), _S), length(_S, N)')['N'] # type: ignore
 
         self.pos_examples_ = ones(self.num_pos)
 
@@ -93,24 +101,25 @@ class Tester:
         if self.settings.recursion_enabled:
             self.query_once(f'assert(timeout({self.settings.eval_timeout})), fail')
 
-    def consult(self, file: str, data: Optional[str] = None):
+    def consult(self, file: str, data: Optional[str] = None) -> None:
         """Consult `file` (or the `data` string) in the Tester's module."""
         consult(file, data = data, module=self.module_name)
 
-    def query_once(self, query: str, inputs: Optional[Dict[str, Any]] = None, error_on_failure: bool = False):
+    def query_once(self, query: str, inputs: Optional[Dict[str, Any]] = None, error_on_failure: bool = False) -> QueryOnceReturn:
         query_string = self.module_name + ":(" + query + ")"
         res = query_once(query_string, inputs=inputs if inputs is not None else {})
         if error_on_failure and not res['truth']:
             raise PopperTesterError(f'Unexpected query failure on: "{query_string}')
-        return res
+        # cast appears necessary because of lack of type hints in janus_swi.query_once
+        return cast(QueryOnceReturn, res)
 
-    def bool_query(self, query) -> bool:
-        return cast(bool, self.query_once(query)['truth'])
+    def bool_query(self, query: str) -> bool:
+        return self.query_once(query)['truth']
 
-    def janus_clear_cache(self):
+    def janus_clear_cache(self) -> QueryOnceReturn:
         return self.query_once('retractall(janus:py_call_cache(_String,_Input,_TV,_M,_Goal,_Dict,_Truth,_OutVars))')
 
-    def parse_single_rule(self, prog):
+    def parse_single_rule(self, prog: RuleBase) -> Tuple[str, str]:
         rule = next(iter(prog))
         head, ordered_body = self.settings.order_rule(rule)
         atom_str = format_literal_janus(head)
@@ -123,7 +132,7 @@ class Tester:
         body_str = ','.join(format_literal_janus(literal) for literal in ordered_body)
         return body_str
 
-    def test_prog_noisy(self, prog, prog_size):
+    def test_prog_noisy(self, prog: RuleBase, prog_size: int) -> Tuple[int, int, int, int]:
         settings = self.settings
         neg_covered = None
         skipped, skip_early_neg = False, False
@@ -153,8 +162,7 @@ class Tester:
 
         return pos_covered, neg_covered, inconsistent, skipped, skip_early_neg
 
-
-    def test_prog(self, prog) -> Tuple[frozenbitarray, bool]:
+    def test_prog(self, prog: RuleBase) -> Tuple[frozenbitarray, bool]:
 
         # sourcery skip: no-conditionals-in-tests
         if self.settings.recursion_enabled or self.settings.pi_enabled:
@@ -192,15 +200,15 @@ class Tester:
                 if self.settings.has_directions:
                     q = f'neg_index(_ID, {atom_str}), {body_str}'
                 else:
-                    head, body = next(iter(prog))
-                    head, ordered_body = self.settings.order_rule((None, body | self.neg_literal_set))
+                    _head, body = next(iter(prog))
+                    _head, ordered_body = self.settings.order_rule((None, body | self.neg_literal_set))
                     q = ','.join(format_literal_janus(literal) for literal in ordered_body)
                 inconsistent = self.bool_query(q)
 
         self.cached_pos_covered[hash(prog)] = pos_covered
         return pos_covered, inconsistent
 
-    def test_prog_all(self, prog) -> Tuple[frozenbitarray, frozenbitarray]:
+    def test_prog_all(self, prog: RuleBase) -> Tuple[frozenbitarray, frozenbitarray]:
         if len(prog) == 1:
             atom_str, body_str = self.parse_single_rule(prog)
             q = f'findall(_ID, (pos_index(_ID, {atom_str}), ({body_str}->  true)), S)'
@@ -225,7 +233,7 @@ class Tester:
 
         return pos_covered_arr, neg_covered_arr
 
-    def test_prog_pos(self, prog) -> frozenbitarray:
+    def test_prog_pos(self, prog: RuleBase) -> frozenbitarray:
 
         if len(prog) == 1:
             atom_str, body_str = self.parse_single_rule(prog)
@@ -240,7 +248,7 @@ class Tester:
         pos_covered = frozenbitarray(pos_covered_bits)
         return pos_covered
 
-    def test_prog_inconsistent(self, prog):
+    def test_prog_inconsistent(self, prog: RuleBase) -> bool:
         if self.num_neg == 0:
             return False
 
@@ -252,9 +260,9 @@ class Tester:
         with self.using(prog):
             return self.bool_query("inconsistent")
 
-    def test_single_rule_neg_at_most_k(self, prog, k):
+    def test_single_rule_neg_at_most_k(self, prog: RuleBase, k: int) -> frozenbitarray:
 
-        neg_covered = []
+        neg_covered: list[int] = []
         if self.num_neg > 0:
             atom_str, body_str = self.parse_single_rule(prog)
             q = f'findfirstn(K, _ID, (neg_index(_ID, {atom_str}),({body_str}->  true)), S)'
@@ -262,11 +270,10 @@ class Tester:
 
         neg_covered_bits = bitarray(self.num_neg)
         neg_covered_bits[neg_covered] = 1
-        neg_covered = frozenbitarray(neg_covered_bits)
-        return neg_covered
+        return frozenbitarray(neg_covered_bits)
 
     # why twice???
-    def get_pos_covered(self, prog):
+    def get_pos_covered(self, prog: RuleBase) -> frozenbitarray:
 
         k1 = hash(prog)
         if k1 in self.cached_pos_covered:
@@ -295,22 +302,25 @@ class Tester:
         return pos_covered
 
     @cache
-    def parse_rule_for_recursion(self, rule):
+    def parse_rule_for_recursion(self, rule: Rule) -> str:
         settings: Settings = self.settings
         return format_rule(settings.order_rule(rule),
                            not (settings.recursion_enabled or settings.has_directions)
                            )[:-1]
 
     @contextmanager
-    def using(self, prog):
+    def using(self, prog: RuleBase) -> Iterator:
 
         str_prog = [':- style_check(-singleton)']
 
+        this_prog: RuleBase | list[Rule]
         if self.settings.recursion_enabled:
-            prog = order_prog(prog)
+            this_prog = order_prog(prog)
+        else:
+            this_prog = prog
 
         current_clauses = set()
-        for rule in prog:
+        for rule in this_prog:
             head, _body = rule
             x = self.parse_rule_for_recursion(rule)
             str_prog.append(x)
@@ -320,14 +330,14 @@ class Tester:
             for p, a in current_clauses:
                 str_prog.append(f':- dynamic {p}/{a}')
 
-        str_prog = '.\n'.join(str_prog) +'.'
-        self.consult('prog', str_prog)
+        self.consult('prog', '.\n'.join(str_prog) + '.')
         yield
         for predicate, arity in current_clauses:
             args = ','.join(['_'] * arity)
-            self.query_once(f"retractall({predicate}({args}))", error_on_failure=True)
+            self.query_once(f"retractall({predicate}({args}))",
+                            error_on_failure=True)
 
-    def is_non_functional(self, prog) -> bool:
+    def is_non_functional(self, prog: RuleBase) -> bool:
         with self.using(prog):
             return self.bool_query('non_functional')
 
@@ -343,7 +353,7 @@ class Tester:
                     return self.reduce_inconsistent(subprog)
         return program
 
-    def is_sat(self, prog):
+    def is_sat(self, prog: RuleBase) -> bool:
 
         k1 = hash(prog)
         if k1 in self.cached_pos_covered:
@@ -375,7 +385,7 @@ class Tester:
                 else:
                     return self.bool_query('sat')
 
-    def is_body_sat(self, body):
+    def is_body_sat(self, body) -> bool:
         if len(body) > 1:
             q = self.parse_body(body)
         else:
@@ -383,7 +393,7 @@ class Tester:
 
         return self.bool_query(q)
 
-    def is_literal_redundant(self, body, literal):
+    def is_literal_redundant(self, body, literal) -> bool:
         literal_str = format_literal_janus(literal)
         if len(body) > 1:
             x = self.parse_body(body)
@@ -392,12 +402,12 @@ class Tester:
         q = f'{x}, \\+ {literal_str}'
         return not self.bool_query(q)
 
-    def diff_subs_single(self, literal):
+    def diff_subs_single(self, literal) -> bool:
         literal_str = format_literal_janus(literal)
         q = f'{self.neg_fact_str}, \\+ {literal_str}'
         return not self.bool_query(q)
 
-    def is_neg_reducible(self, body, literal):
+    def is_neg_reducible(self, body, literal) -> bool:
         # AC: we do not cache as we can never see body + neg_literal again
         head, ordered_body = self.settings.order_rule((None, body | self.neg_literal_set))
         body_str = ','.join(format_literal_janus(literal) for literal in ordered_body)
@@ -406,7 +416,7 @@ class Tester:
         return not self.bool_query(q)
 
     @cache
-    def has_redundant_literal(self, prog):
+    def has_redundant_literal(self, prog) -> bool:
         for rule in prog:
             head, body = rule
             if head:
@@ -450,13 +460,16 @@ class Tester:
     #         return self.find_redundant_rule_(step)
     #     return None
 
-    def find_pointless_relations(self):
+    def find_pointless_relations(self) -> set[Tuple[str, int]]:
         settings = self.settings
         keep = set()
         pointless = set()
 
         missing = set()
-        arities = {}
+        arities: dict[str, int] = {}
+
+        p: str
+        pa: int
 
         for p, pa in settings.body_preds:
             arities[p] = pa
@@ -483,7 +496,8 @@ class Tester:
                     continue
                 if pa != qa:
                     continue
-                if settings.body_types and settings.body_types[p] != settings.body_types[q]:
+                if settings.body_types and \
+                   settings.body_types[p] != settings.body_types[q]:
                     continue
 
                 if q in missing:
@@ -495,13 +509,16 @@ class Tester:
                 # print(query1)
                 # print(query2)
                 try:
-                    if self.query_once(query1)['truth'] or self.query_once(query2)['truth']:
+                    if self.query_once(query1)['truth'] or \
+                       self.query_once(query2)['truth']:
                         continue
                 except Exception as Err:
                     settings.logger.error(f'ERROR detecting pointless relations: {Err}')
                     return pointless
 
-                a, b = (p,pa), (q,qa)
+                a: Tuple[str, int]
+                b: Tuple[str, int]
+                a, b = (p, pa), (q, qa)
 
                 # WTF IS GOING ON HERE?
                 if a in keep and b in keep:
@@ -529,43 +546,76 @@ class Tester:
         # return frozenset((p, arities[p]) for p in pointless)
         return pointless
 
-    def destroy_prolog_module(self):
+    def destroy_prolog_module(self) -> None:
         if not query_once('modules:destroy_module(Module)', {'Module': self.module_name})['truth']:
             raise PopperTesterError(f'module {self.module_name} not destroyed')
 
 
-def deduce_neg_example_recalls(settings, atoms):
-    # Jan Struyf, Hendrik Blockeel: Query Optimization in Inductive Logic Programming by Reordering Literals. ILP 2003: 329-346
+# FIXME: need more information about types
+def deduce_neg_example_recalls(settings: Settings,
+                               atoms: Collection[list[str]]) -> dict[Tuple, int]:
+    # Jan Struyf, Hendrik Blockeel: Query Optimization in Inductive Logic
+    # Programming by Reordering Literals. ILP 2003: 329-346
 
     arity = len(settings.head_literal.arguments)
     binary_strings = generate_binary_strings(arity)
-    counts = {var_subset: defaultdict(set) for var_subset in binary_strings}
+    counts: Dict[Tuple[int, ...], Dict[Any, set]] = \
+        {var_subset: defaultdict(set) for var_subset in binary_strings}
 
     for var_subset in binary_strings:
         # print(var_subset)
         d1 = counts[var_subset]
         for args in atoms:
             # print(args)
-            key = []
-            value = []
+            key_acc = []
+            value_acc = []
             for i in range(arity):
                 if var_subset[i]:
-                    key.append(args[i])
+                    key_acc.append(args[i])
                 else:
-                    value.append(args[i])
-            key = tuple(key)
-            value = tuple(value)
+                    value_acc.append(args[i])
+            key = tuple(key_acc)
+            value = tuple(value_acc)
             d2 = d1[key]
             d2.add(value)
 
-    all_recalls = {}
+    all_recalls: dict[Tuple[str, Tuple[int, ...]], int] = {}
     pred = 'neg_fact'
     all_recalls[(pred, (0,)*arity)] = len(atoms)
     # print(counts.items())
-    for args, d2 in counts.items():
-        recall = max(len(xs) for xs in d2.values())
-        all_recalls[(pred, args)] = recall
+    for int_args, dd in counts.items():
+        recall: int = max(len(xs) for xs in dd.values())
+        all_recalls[(pred, int_args)] = recall
     return all_recalls
 
-def generate_binary_strings(bit_count):
-    return list(product((0,1), repeat=bit_count))[1:-1]
+def generate_binary_strings(bit_count: int) -> \
+        list[Tuple[TypingLiteral[0, 1], ...]]:
+    """
+    Generate list of binary tuples.
+
+    Generate and return a list of tuples that are all
+    bit values of `bit_count` bits, excluding all zeros
+    and all ones.
+
+    Parameters
+    ----------
+    bit_count : int
+        Length of bit strings
+
+    Returns
+    -------
+    list of tuples
+        List of tuples of `bit_count` length
+
+    Examples
+    --------
+    generate_binary_strings(3)
+    (0, 0, 1)
+    (0, 1, 0)
+    (0, 1, 1)
+    (1, 0, 0)
+    (1, 0, 1)
+    (1, 1, 0)
+    """
+    return cast(list[Tuple[TypingLiteral[0, 1], ...]],
+                list(product((0,1), repeat=bit_count))[1:-1])

@@ -1,16 +1,17 @@
 import argparse
 import logging
+import os
 import signal
 from collections import defaultdict
 from contextlib import contextmanager
 from itertools import permutations
 from time import perf_counter
-from typing import Any, Dict, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, Optional, Set, Tuple
 
 import clingo
 import clingo.script
 
-from popper.type_defs import Literal, Rule
+from popper.type_defs import Literal, Rule, RuleBase
 
 
 clingo.script.enable_python()
@@ -173,13 +174,14 @@ class Stats:
 # def format_prog2(prog):
 # return '\n'.join(format_rule(order_rule2(rule)) for rule in order_prog(prog))
 
-def format_literal(literal):
+def format_literal(literal: Tuple[str, Tuple[int, ...]]) -> str:
     pred, args = literal
-    args = ','.join(f'V{i}' for i in args)
-    return f'{pred}({args})'
+    args_str: str = ','.join(f'V{i}' for i in args)
+    return f'{pred}({args_str})'
 
 
-def format_rule(rule, sort: bool = False):
+def format_rule(rule: Tuple[Tuple[str, Tuple[int, ...]], list[Tuple[str, Tuple[int, ...]]]],
+                sort: bool = False) -> str:
     head, body = rule
     head_str = ''
     if head:
@@ -191,16 +193,16 @@ def format_rule(rule, sort: bool = False):
     return f'{head_str}:- {body_str}.'
 
 
-def calc_prog_size(prog):
+def calc_prog_size(prog: RuleBase) -> int:
     return sum(calc_rule_size(rule) for rule in prog)
 
 
-def calc_rule_size(rule):
-    head, body = rule
+def calc_rule_size(rule: Rule) -> int:
+    _head, body = rule
     return 1 + len(body)
 
 
-def reduce_prog(prog):
+def reduce_prog(prog: RuleBase) -> Iterable[Rule]:
     reduced = {}
     for rule in prog:
         head, body = rule
@@ -209,11 +211,13 @@ def reduce_prog(prog):
     return reduced.values()
 
 
-def order_prog(prog):
-    return sorted(list(prog), key=lambda rule: (rule_is_recursive(rule), len(rule[1])))
+def order_prog(prog: RuleBase) -> list[Rule]:
+    return sorted(list(prog),
+                  key=lambda rule: (rule_is_recursive(rule),
+                                    len(rule[1])))
 
 
-def rule_is_recursive(rule):
+def rule_is_recursive(rule: Rule) -> bool:
     head, body = rule
     head_pred, _head_args = head
     if not head:
@@ -221,19 +225,19 @@ def rule_is_recursive(rule):
     return any(head_pred == pred for pred, _args in body)
 
 
-def prog_is_recursive(prog):
+def prog_is_recursive(prog: RuleBase) -> bool:
     if len(prog) < 2:
         return False
     return any(rule_is_recursive(rule) for rule in prog)
 
 
-def prog_has_invention(prog):
+def prog_has_invention(prog: RuleBase) -> bool:
     if len(prog) < 2:
         return False
     return any(rule_is_invented(rule) for rule in prog)
 
 
-def rule_is_invented(rule):
+def rule_is_invented(rule: Rule) -> bool:
     head, body = rule
     if not head:
         return False
@@ -241,12 +245,12 @@ def rule_is_invented(rule):
     return head_pred.startswith('inv')
 
 
-def mdl_score(fn, fp, size):
+def mdl_score(fn: int, fp: int, size: int) -> int:
     return fn + fp + size
 
 
 class DurationSummary:
-    def __init__(self, operation, called, total, mean, maximum):
+    def __init__(self, operation, called, total, mean, maximum) -> None:
         self.operation = operation
         self.called = called
         self.total = total
@@ -254,7 +258,7 @@ class DurationSummary:
         self.maximum = maximum
 
 
-def flatten(xs):
+def flatten(xs: list[list]) -> list:
     return [item for sublist in xs for item in sublist]
 
 
@@ -656,14 +660,17 @@ class Settings:
 
         return head, tuple(ordered_body)
 
-    def order_rule_datalog(self, head, body):
+    def order_rule_datalog(self,
+                           head: Tuple[str, Tuple[int, ...]],
+                           body: list[Tuple[str, Tuple[int, ...]]]) -> \
+            Tuple[Tuple[str, Tuple[int, ...]], Tuple]:
 
         ordered_body = []
-        seen_vars = set()
+        seen_vars: set[int] = set()
 
         if head:
-            seen_vars.update(head.arguments)
-            recursive_literals = set(literal for literal in body if literal.predicate == head.predicate)
+            seen_vars.update(head[1])
+            recursive_literals = set(literal for literal in body if literal[0] == head[0])
         else:
             recursive_literals = set()
 
@@ -672,15 +679,15 @@ class Settings:
         while body_literals:
             selected_literal = None
             for literal in body_literals:
-                if set(literal.arguments).issubset(seen_vars):
+                if set(literal[1]).issubset(seen_vars):
                     selected_literal = literal
                     break
 
-            if selected_literal == None:
+            if selected_literal is None:
                 selected_literal = min(body_literals, key=lambda x: self.tmp_score_(seen_vars, x))
 
             ordered_body.append(selected_literal)
-            seen_vars.update(selected_literal.arguments)
+            seen_vars.update(selected_literal[1])
             body_literals.remove(selected_literal)
 
         return head, tuple(ordered_body) + tuple(recursive_literals)
@@ -798,9 +805,6 @@ def load_types(settings):
 #             return False
 
 #     return True
-
-import os
-
 
 # AC: I do not know what this code below really does, but it works
 class suppress_stdout_stderr(object):

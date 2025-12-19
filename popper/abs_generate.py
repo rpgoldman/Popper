@@ -1,6 +1,6 @@
 import abc
 from collections import defaultdict
-from typing import Set, TYPE_CHECKING, List, Optional, Sequence, Tuple, Callable, Dict, Iterator
+from typing import Set, TYPE_CHECKING, Iterable, Any, List, Optional, Sequence, Tuple, Callable, Dict, Iterator
 
 import clingo
 
@@ -15,9 +15,14 @@ class Generator(abc.ABC):
     handle: Optional[Iterator[clingo.Model]]
     clingo_handle: Optional[clingo.solving.SolveHandle]
     model: Optional[clingo.Model]
-    cached_clingo_atoms: Dict[int, clingo.Symbol] # hash of literal to clingo Symbol
+    # map to pairs of clingo symbol and sign (which I believe to be a string)
+    cached_clingo_atoms: Dict[int, Tuple[clingo.Symbol, bool]] # hash of literal to clingo Symbol and sign
 
-    def set_handle(self, reset: bool = False) -> None:
+    def set_handle(self,
+                   reset: bool = False,
+                   assumptions: List[Tuple[clingo.Symbol, bool]] |
+                                List[int] |
+                                None = None) -> None:
         """
         Reset the Generator's paired Clingo handles.
         Parameters
@@ -27,11 +32,15 @@ class Generator(abc.ABC):
            then make new `handle` and `clingo_handle` for the generator.
            Otherwise (the default), only make new handles if the handles
            are not already set.
+        assumptions :
         """
         # NOTE: Not sure whether this should reset self.model when
         # resetting the handles
         if self.handle is None or reset:
-            clingo_handle = self.solver.solve(yield_=True)
+            if assumptions is None:
+                clingo_handle = self.solver.solve(yield_=True)
+            else:
+                clingo_handle = self.solver.solve(yield_=True, assumptions=assumptions)
             self.clingo_handle = clingo_handle
             self.handle = iter(clingo_handle)
         else:
@@ -55,7 +64,7 @@ class Generator(abc.ABC):
     #     pass
 
     @abc.abstractmethod
-    def update_solver(self, size):
+    def update_solver(self, size: int) -> None:
         pass
 
     # @abc.abstractmethod
@@ -71,7 +80,7 @@ class Generator(abc.ABC):
     #     pass
 
     @abc.abstractmethod
-    def prune_size(self, size):
+    def prune_size(self, size: int) -> None:
         pass
 
     # @abc.abstractmethod
@@ -83,7 +92,7 @@ class Generator(abc.ABC):
     #     pass
 
     @abc.abstractmethod
-    def constrain(self, tmp_new_cons):
+    def constrain(self, tmp_new_cons) -> None:
         pass
 
     @abc.abstractmethod
@@ -137,7 +146,7 @@ class Generator(abc.ABC):
         return frozenset(prog)
 
     @staticmethod
-    def arg_to_symbol(arg):
+    def arg_to_symbol(arg: Any) -> clingo.Symbol:
         if isinstance(arg, tuple):
             return clingo.Tuple_(tuple(Generator.arg_to_symbol(a) for a in arg))
         if isinstance(arg, int):
@@ -147,7 +156,7 @@ class Generator(abc.ABC):
         raise TypeError(f"Cannot translate {arg} to clingo Symbol")
 
     @staticmethod
-    def atom_to_symbol(pred, args):
+    def atom_to_symbol(pred: str, args: Iterable[Any]) -> clingo.Symbol:
         xs = tuple(Generator.arg_to_symbol(arg) for arg in args)
         return clingo.Function(name=pred, arguments=xs)
 
@@ -185,7 +194,8 @@ class Generator(abc.ABC):
 
         return frozenset(prog)
 
-    def instantiate_constraints(self, new_ground_cons):
+    def instantiate_constraints(self, new_ground_cons: Iterable[List[Tuple[bool, str, Any]]]) -> None:
+        assert self.model
         tmp: Callable[[List[Tuple[clingo.Symbol, bool]]], None] = self.model.context.add_nogood
         cached_clingo_atoms = self.cached_clingo_atoms
         for ground_body in new_ground_cons:
