@@ -2,6 +2,7 @@ import datetime
 import logging
 import os
 import traceback
+import uuid
 from collections import defaultdict
 from contextlib import contextmanager
 from functools import cache
@@ -35,6 +36,7 @@ class Tester:
     neg_fact_str: str
     neg_literal_set: frozenset
     module_name: str
+    string_module: str # pseudo-filename used in consult
 
     def __init__(self, settings: Settings) -> None:
         # global logger
@@ -44,6 +46,7 @@ class Tester:
         # use specific logger for Tester
         # logger = self.settings.logger
 
+        self.string_module = f"prog_{uuid.uuid4().hex}"
         bk_pl_path = self.settings.bk_file
         exs_pl_path = self.settings.ex_file
         test_pl_path = str(resource_filename(__name__, "lp/test.pl"))
@@ -57,7 +60,7 @@ class Tester:
             raise PopperTesterError(f'Unable to create temporary module named {module_name}')
 
         if not settings.pi_enabled:
-            self.consult('prog', f':- dynamic {settings.head_literal.predicate}/{len(settings.head_literal.arguments)}.')
+            self.consult(self.string_module, f':- dynamic {settings.head_literal.predicate}/{len(settings.head_literal.arguments)}.')
 
         for x in [exs_pl_path, bk_pl_path, test_pl_path]:
             if os.name == 'nt': # if on Windows, SWI requires escaped directory separators
@@ -330,7 +333,7 @@ class Tester:
             for p, a in current_clauses:
                 str_prog.append(f':- dynamic {p}/{a}')
 
-        self.consult('prog', '.\n'.join(str_prog) + '.')
+        self.consult(self.string_module, '.\n'.join(str_prog) + '.')
         yield
         for predicate, arity in current_clauses:
             args = ','.join(['_'] * arity)
