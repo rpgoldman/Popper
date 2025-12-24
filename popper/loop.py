@@ -65,6 +65,7 @@ def load_solver(settings, tester, coverage_pos, coverage_neg, prog_lookup):
 class Popper():
     def __init__(self, settings, tester):
         self.settings = settings
+        self.logger = settings.logger
         self.tester = tester
         self.pruned2 = set()
 
@@ -205,6 +206,7 @@ class Popper():
                     settings.solution = prog
                     settings.best_prog_score = num_pos, 0, num_neg, 0, prog_size
                     settings.best_mdl = prog_size
+                    settings.logger.info("Non-separable program covers all examples: stopping")
                     return
 
                 if settings.noisy and not skipped:
@@ -658,7 +660,7 @@ class Popper():
 
                             # if size >= settings.max_literals and not settings.order_space:
                             if size >= settings.max_literals:
-                                print('POOPER')
+                                settings.logger.INFO("Size is greater than max_literals and order_space ireturs not true, stopping")
                                 return
 
                             # AC: sometimes adding these size constraints can take longer
@@ -735,8 +737,10 @@ class Popper():
                         if size >= settings.max_literals:
                             assert(False)
             if settings.single_solve:
+                self.logger.info("Popper.run(): Looking for only a single solution and have found one. Terminating.")
                 break
         assert(len(to_combine) == 0)
+        self.logger.info("Popper.run() loop terminated.")
 
     def check_redundant_literal(self, prog):
         tester, settings = self.tester, self.settings
