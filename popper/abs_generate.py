@@ -4,7 +4,7 @@ from typing import Set, TYPE_CHECKING, Iterable, Any, List, Optional, Sequence, 
 
 import clingo
 
-from .type_defs import Literal, RuleBase, Rule
+from .type_defs import Literal, NumericLiteral, RuleBase, NumericRule, NumericRuleBase
 
 if TYPE_CHECKING:
     from .util import Settings
@@ -56,7 +56,7 @@ class Generator(abc.ABC):
         self.model = None
 
     @abc.abstractmethod
-    def get_prog(self) -> Optional[RuleBase]:
+    def get_prog(self) -> Optional[NumericRuleBase]:
         pass
 
     # @abc.abstractmethod
@@ -160,20 +160,20 @@ class Generator(abc.ABC):
         xs = tuple(Generator.arg_to_symbol(arg) for arg in args)
         return clingo.Function(name=pred, arguments=xs)
 
-    def parse_model_single_rule(self, model: Sequence[clingo.Symbol]) -> RuleBase:
+    def parse_model_single_rule(self, model: Sequence[clingo.Symbol]) -> NumericRuleBase:
         settings = self.settings
-        head: Literal = settings.head_literal
-        body: Set[Literal] = set()
+        head: NumericLiteral = settings.head_literal
+        body: Set[NumericLiteral] = set()
         for atom in model:
             args = atom.arguments
             predicate = args[1].name
             atom_args = tuple(args[3].arguments)
-            literal: Literal = settings.retrieve_literal(predicate, atom_args)
+            literal: NumericLiteral = settings.retrieve_literal(predicate, atom_args)
             body.add(literal)
-        rule: Rule = head, frozenset(body)
+        rule: NumericRule = head, frozenset(body)
         return frozenset([rule])
 
-    def parse_model_recursion(self, model: Sequence[clingo.Symbol]) -> RuleBase:
+    def parse_model_recursion(self, model: Sequence[clingo.Symbol]) -> NumericRuleBase:
         settings = self.settings
         rule_index_to_body = defaultdict(set)
         head = settings.head_literal

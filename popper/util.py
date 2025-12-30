@@ -6,14 +6,13 @@ from collections import defaultdict
 from contextlib import contextmanager
 from itertools import permutations
 from time import perf_counter
-from contextlib import contextmanager
-from typing import Any, Callable, Dict, Iterable, Optional, Set, Tuple, TypeVar
+from typing import Any, Callable, Dict, Iterable, Iterator, Optional, Set, Tuple, TypeVar, overload, Literal as TypingLiteral
 
 import clingo
 import clingo.script
+from bitarray import frozenbitarray
 
-from popper.type_defs import Literal, Rule, RuleBase
-
+from popper.type_defs import Literal, Rule, RuleBase, NumericLiteral, NumericRule, NumericRuleBase
 
 clingo.script.enable_python()
 
@@ -43,7 +42,7 @@ class Constraint:
     BANISH = 7
 
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Popper is an ILP system based on learning from failures')
 
     parser.add_argument('kbpath', help='Path to files to learn from')
@@ -64,6 +63,7 @@ def parse_args():
     parser.add_argument('--stats', default=False, action='store_true', help='Print statistics at end of execution')
     parser.add_argument('--quiet', '-q', default=False, action='store_true', help='Hide information during learning')
     parser.add_argument('--debug', default=False, action='store_true', help='Print debugging information to stderr')
+    parser.add_argument('--info', default=False, action='store_true', help='Print INFO level logs to stderr')
     parser.add_argument('--showcons', default=False, action='store_true',
                         help='Show constraints deduced during the search')
     parser.add_argument('--solver', default='rc2', choices=['clingo', 'rc2', 'uwr', 'wmaxcdcl'],
@@ -94,8 +94,8 @@ def timeout(settings: 'Settings',
     if kwargs is None:
         kwargs = {}
 
-    if timeout_duration <= 0:
-        settings.logger.error("Attempting to run %s(%s) with timeout value of zero or below.", str(func), str(args))
+    if timeout_duration == 0:
+        settings.logger.error("Attempting to run %s(%s) with timeout value of zero.", str(func), str(args))
         return result
 
     def handler(signum: int, frame: Any) -> None:
@@ -123,8 +123,8 @@ def timeout(settings: 'Settings',
     return result
 
 
-def load_kbpath(kbpath):
-    def fix_path(filename):
+def load_kbpath(kbpath: str) -> Tuple[str, str, str]:
+    def fix_path(filename: str) -> str:
         full_filename = os.path.join(kbpath, filename)
         return full_filename.replace('\\', '\\\\') if os.name == 'nt' else full_filename
 
@@ -134,16 +134,19 @@ def load_kbpath(kbpath):
 class Stats:
     logger: logging.Logger
     maxsat_calls: int
+    durations: dict[str, list[float]]
+    exec_start: float
+    total_programs: int
 
-    def __init__(self, info=False, debug=False):
+    def __init__(self) -> None:
         self.exec_start = perf_counter()
         self.total_programs = 0
         self.durations = {}
 
-    def total_exec_time(self):
+    def total_exec_time(self) -> float:
         return perf_counter() - self.exec_start
 
-    def show(self):
+    def show(self) -> str:
         message = f'Num. programs: {self.total_programs}\n'
         total_op_time = sum(summary.total for summary in self.duration_summary())
 
@@ -157,7 +160,7 @@ class Stats:
         print(message)
         return message
 
-    def duration_summary(self):
+    def duration_summary(self) -> list['DurationSummary']:
         summary = []
         stats = sorted(self.durations.items(), key=lambda x: sum(x[1]), reverse=True)
         for operation, durations in stats:
@@ -169,7 +172,7 @@ class Stats:
         return summary
 
     @contextmanager
-    def duration(self, operation):
+    def duration(self, operation: str) -> Iterator[None]:
         start = perf_counter()
         try:
             yield
@@ -186,13 +189,13 @@ class Stats:
 # def format_prog2(prog):
 # return '\n'.join(format_rule(order_rule2(rule)) for rule in order_prog(prog))
 
-def format_literal(literal: Tuple[str, Tuple[int, ...]]) -> str:
+def format_literal(literal: NumericLiteral | Literal) -> str:
     pred, args = literal
     args_str: str = ','.join(f'V{i}' for i in args)
     return f'{pred}({args_str})'
 
 
-def format_rule(rule: Tuple[Tuple[str, Tuple[int, ...]], list[Tuple[str, Tuple[int, ...]]]],
+def format_rule(rule: NumericRule | Tuple[Literal, Iterable[Literal]],
                 sort: bool = False) -> str:
     head, body = rule
     head_str = ''
@@ -205,11 +208,11 @@ def format_rule(rule: Tuple[Tuple[str, Tuple[int, ...]], list[Tuple[str, Tuple[i
     return f'{head_str}:- {body_str}.'
 
 
-def calc_prog_size(prog: RuleBase) -> int:
+def calc_prog_size(prog: RuleBase | NumericRuleBase) -> int:
     return sum(calc_rule_size(rule) for rule in prog)
 
 
-def calc_rule_size(rule: Rule) -> int:
+def calc_rule_size(rule: Rule | NumericRule) -> int:
     _head, body = rule
     return 1 + len(body)
 
@@ -223,13 +226,13 @@ def reduce_prog(prog: RuleBase) -> Iterable[Rule]:
     return reduced.values()
 
 
-def order_prog(prog: RuleBase) -> list[Rule]:
+def order_prog(prog: NumericRuleBase) -> list[NumericRule]:
     return sorted(list(prog),
                   key=lambda rule: (rule_is_recursive(rule),
                                     len(rule[1])))
 
 
-def rule_is_recursive(rule: Rule) -> bool:
+def rule_is_recursive(rule: NumericRule) -> bool:
     head, body = rule
     head_pred, _head_args = head
     if not head:
@@ -237,20 +240,20 @@ def rule_is_recursive(rule: Rule) -> bool:
     return any(head_pred == pred for pred, _args in body)
 
 
-def prog_is_recursive(prog: RuleBase) -> bool:
+def prog_is_recursive(prog: NumericRuleBase) -> bool:
     if len(prog) < 2:
         return False
     return any(rule_is_recursive(rule) for rule in prog)
 
 
-def prog_has_invention(prog: RuleBase) -> bool:
+def prog_has_invention(prog: NumericRuleBase) -> bool:
     if len(prog) < 2:
         return False
     return any(rule_is_invented(rule) for rule in prog)
 
 
-def rule_is_invented(rule: Rule) -> bool:
-    head, body = rule
+def rule_is_invented(rule: NumericRule | Rule) -> bool:
+    head, _body = rule
     if not head:
         return False
     head_pred, _head_arg = head
@@ -262,7 +265,13 @@ def mdl_score(fn: int, fp: int, size: int) -> int:
 
 
 class DurationSummary:
-    def __init__(self, operation, called, total, mean, maximum) -> None:
+    operation: str
+    called: int
+    total: float
+    mean: float
+    maximum: float
+
+    def __init__(self, operation: str, called: int, total: float, mean: float, maximum: float) -> None:
         self.operation = operation
         self.called = called
         self.total = total
@@ -274,14 +283,14 @@ def flatten(xs: list[list]) -> list:
     return [item for sublist in xs for item in sublist]
 
 
-class Settings:
+class Settings:  # pylint: disable=too-many-instance-attributes
 
     anytime_maxsat_solver: str
     anytime_maxsat_solver_params: str
     anytime_maxsat_solver_signal: int
     batch_size: int
-    best_mdl: int # best model description length
-    cached_literals: Dict[Tuple[str, Any], Literal]
+    best_mdl: int  # best model description length
+    cached_literals: Dict[Tuple[str, Any], NumericLiteral]
     cached_atom_args: Dict[Tuple[clingo.Symbol, ...], Tuple[int, ...]]
     datalog: bool
     exact_maxsat_solver: str
@@ -298,6 +307,9 @@ class Settings:
     showcons: bool
     solution_found: Any
     show_failures: bool  # display detailed FP and FN information
+    solution: Optional[NumericRuleBase]
+    nonoise: bool
+    noisy: bool
 
     # domain features
     has_directions: bool
@@ -305,11 +317,21 @@ class Settings:
     pi_enabled: bool
     recursion_enabled: bool
 
-    def __init__(self, cmd_line=False, info=True, debug=False, show_stats=True, max_literals=MAX_LITERALS,
+    # input files -- filenames
+    bk_file: str
+    ex_file: str
+    bias_file: str
+
+    recall: dict[Tuple[str, Tuple[TypingLiteral[0,1], ...]], int]
+
+    best_prog_score: Optional[Tuple[int, frozenbitarray, frozenbitarray, int, int]]
+
+    # pylint: disable=R0912,R0915
+    def __init__(self, cmd_line: bool = False, info=True, debug=False, show_stats=True, max_literals=MAX_LITERALS,
                  timeout=TIMEOUT, quiet=False, eval_timeout=EVAL_TIMEOUT, max_examples=MAX_EXAMPLES, max_body=None,
                  max_rules=None, max_vars=None, functional_test=False, kbpath: Optional[str]=None, ex_file=False, bk_file=False,
                  bias_file=False, showcons=False, no_bias=False, order_space=False, noisy=False, batch_size=BATCH_SIZE,
-                 solver='rc2', anytime_solver=None, anytime_timeout=ANYTIME_TIMEOUT, show_failures=False):
+                 solver='rc2', anytime_solver=None, anytime_timeout=ANYTIME_TIMEOUT, show_failures=False) -> None:
 
         if cmd_line:
             args = parse_args()
@@ -336,6 +358,7 @@ class Settings:
             solver = args.solver
             anytime_solver = args.anytime_solver
             anytime_timeout = args.anytime_timeout
+            info = args.info
         else:
             if kbpath:
                 self.bk_file, self.ex_file, self.bias_file = load_kbpath(kbpath)
@@ -349,12 +372,13 @@ class Settings:
         self.logger = logging.getLogger("popper")
 
         class SecondsFormatter(logging.Formatter):
-            def format(self, record):
+            def format(self, record: logging.LogRecord) -> str:
                 record.elapsed_secs = record.relativeCreated / 1000.0
                 return super().format(record)
 
         formatter = SecondsFormatter(
-            "%(elapsed_secs).1f s %(levelname)s: %(message)s"
+            "%(asctime)s; %(elapsed_secs).1f s %(levelname)s: %(message)s",
+            "%Y-%m-%d %H:%M:%S"
         )
 
         handler = logging.StreamHandler()
@@ -372,11 +396,13 @@ class Settings:
             log_level = logging.INFO
         else:
             log_level = logging.WARNING
-        logging.basicConfig(format='%(message)s', level=log_level, datefmt='%H:%M:%S')
+        print("Setting debug level to ",
+              "Error" if log_level == logging.ERROR else "info" if log_level == logging.INFO else "Debug" if log_level == logging.DEBUG else "Warning")
+        self.logger.setLevel(log_level)
 
         self.info = info
         self.debug = debug
-        self.stats = Stats(info=info, debug=debug)
+        self.stats = Stats()
         self.stats.logger = self.logger
         self.show_stats = show_stats
         self.showcons = showcons
@@ -456,7 +482,7 @@ class Settings:
             head_pred = x.symbol.arguments[0].name
             head_arity = x.symbol.arguments[1].number
             head_args = tuple(range(head_arity))
-            self.head_literal = Literal(head_pred, head_args)
+            self.head_literal = NumericLiteral(head_pred, head_args)
 
         if self.max_body is None:
             for x in solver.symbolic_atoms.by_signature('max_body', arity=1):
@@ -502,9 +528,9 @@ class Settings:
 
         self.cached_atom_args = {}
         for i in range(1, self.max_arity + 1):
-            for args in permutations(range(0, self.max_vars), i):
-                k = tuple(clingo.Number(x) for x in args)
-                self.cached_atom_args[k] = args
+            for _args in permutations(range(0, self.max_vars), i):
+                k = tuple(clingo.Number(x) for x in _args)
+                self.cached_atom_args[k] = _args
 
         self.cached_literals = {}
         self.literal_inputs = {}
@@ -520,16 +546,16 @@ class Settings:
                 self.literal_outputs[(head_pred, head_args)] = head_outputs
 
         for pred, arity in self.body_preds:
-            for k, args in self.cached_atom_args.items():
-                if len(args) != arity:
+            for k, __args in self.cached_atom_args.items():
+                if len(__args) != arity:
                     continue
-                literal = Literal(pred, args)
+                literal = NumericLiteral(pred, __args)
                 self.cache_literal(pred, k, literal)
                 if self.has_directions:
-                    self.literal_inputs[(pred, args)] = frozenset(
-                        arg for i, arg in enumerate(args) if directions[pred][i] == '+')
-                    self.literal_outputs[(pred, args)] = frozenset(
-                        arg for i, arg in enumerate(args) if directions[pred][i] == '-')
+                    self.literal_inputs[(pred, __args)] = frozenset(
+                        arg for i, arg in enumerate(__args) if directions[pred][i] == '+')
+                    self.literal_outputs[(pred, __args)] = frozenset(
+                        arg for i, arg in enumerate(__args) if directions[pred][i] == '-')
 
         # for k, vs in self.literal_inputs.items():
         # print(k, vs)
@@ -540,13 +566,13 @@ class Settings:
         pred = self.head_literal.predicate
         arity = len(self.head_literal.arguments)
 
-        for k, args in self.cached_atom_args.items():
-            if len(args) != arity:
+        for k, __args in self.cached_atom_args.items():
+            if len(__args) != arity:
                 continue
-            literal = Literal(pred, args)
+            literal = NumericLiteral(pred, __args)
             self.cache_literal(pred, k, literal)
 
-        if self.max_rules == None:
+        if self.max_rules is None:
             if self.recursion_enabled or self.pi_enabled:
                 self.max_rules = max_rules
             else:
@@ -554,11 +580,11 @@ class Settings:
 
         self.head_types, self.body_types = load_types(self)
 
-        if len(self.body_types) > 0 or not self.head_types is None:
+        if len(self.body_types) > 0 or self.head_types is not None:
             if self.head_types is None:
                 print('WARNING: MISSING HEAD TYPE')
                 # exit()
-            for p, a in self.body_preds:
+            for p, _as in self.body_preds:
                 if p not in self.body_types:
                     print(f'WARNING: MISSING BODY TYPE FOR {p}')
                     # exit()
@@ -571,13 +597,13 @@ class Settings:
 
         self.single_solve = not (self.recursion_enabled or self.pi_enabled)
 
-    def cache_literal(self, pred: str, k: Tuple[clingo.Symbol, ...], literal: Literal) -> None:
+    def cache_literal(self, pred: str, k: Tuple[clingo.Symbol, ...], literal: NumericLiteral) -> None:
         self.cached_literals[(pred, k)] = literal
 
-    def retrieve_literal(self, pred:str, args: Tuple[clingo.Symbol, ...]) -> Literal:
+    def retrieve_literal(self, pred: str, args: Tuple[clingo.Symbol, ...]) -> NumericLiteral:
         if (pred, args) in self.cached_literals:
             return self.cached_literals[(pred, args)]
-        new_literal = Literal(pred, tuple(x.number for x in args))
+        new_literal = NumericLiteral(pred, tuple(x.number for x in args))
         self.cached_literals[(pred, args)] = new_literal
         return new_literal
 
@@ -614,7 +640,7 @@ class Settings:
         # print(self.format_prog(order_prog(prog)))
         print('*' * 30)
 
-    def order_rule(self, rule):
+    def order_rule(self, rule: NumericRule | Tuple[None, Iterable[NumericLiteral]]):
         head, body = rule
 
         if self.pi_enabled:
@@ -627,12 +653,12 @@ class Settings:
             return rule
 
         ordered_body = []
-        grounded_variables = set()
+        grounded_variables: set[int] = set()
 
         if head:
             head_pred, head_args = head
             head_inputs = self.literal_inputs[(head_pred, head_args)]
-            if head_inputs == []:
+            if not head_inputs:
                 return rule
             grounded_variables.update(head_inputs)
 
@@ -656,11 +682,12 @@ class Settings:
                     # find the first ground non-recursive body literal and stop
                     selected_literal = literal
                     break
-                elif selected_literal == None:
+
+                if selected_literal is None:
                     # otherwise use the recursive body literal
                     selected_literal = literal
 
-            if selected_literal == None:
+            if selected_literal is None:
                 message = f'{selected_literal} in clause {format_rule(rule)} could not be grounded'
                 raise ValueError(message)
 
@@ -672,10 +699,9 @@ class Settings:
 
         return head, tuple(ordered_body)
 
-    def order_rule_datalog(self,
-                           head: Tuple[str, Tuple[int, ...]],
-                           body: list[Tuple[str, Tuple[int, ...]]]) -> \
-            Tuple[Tuple[str, Tuple[int, ...]], Tuple]:
+    def order_rule_datalog(self, head: Optional[NumericLiteral], body: Iterable[NumericLiteral])\
+            -> Tuple[NumericLiteral, Tuple[NumericLiteral, ...]]:
+        """Return a tuple of head and a reordered body, with recursive literals last."""
 
         ordered_body = []
         seen_vars: set[int] = set()
@@ -696,15 +722,17 @@ class Settings:
                     break
 
             if selected_literal is None:
-                selected_literal = min(body_literals, key=lambda x: self.tmp_score_(seen_vars, x))
+                selected_literal = min(body_literals,
+                                       key=lambda x: self.tmp_score_(seen_vars, x))
+            sl: NumericLiteral = NumericLiteral.from_tuple(selected_literal)
 
-            ordered_body.append(selected_literal)
-            seen_vars.update(selected_literal[1])
+            ordered_body.append(sl)
+            seen_vars.update(sl.arguments)
             body_literals.remove(selected_literal)
 
         return head, tuple(ordered_body) + tuple(recursive_literals)
 
-    def tmp_score_(self, seen_vars, literal):
+    def tmp_score_(self, seen_vars, literal) -> int:
         pred, args = literal
         return self.recall[pred, tuple(1 if x in seen_vars else 0 for x in args)]
 
@@ -717,7 +745,24 @@ class Settings:
 #     s = tuple(iterable)
 #     return chain.from_iterable(combinations(s, r) for r in range(1, len(s)))
 
-def load_types(settings):
+def load_types(settings: Settings) -> Tuple[Optional[list[str]],
+                                            dict[str, list[str]]]:
+    """
+    Return information about the types of predicates for the problem.
+
+    Parameters
+    ----------
+    popper.util.Settings
+      Settings object with information about predicate signatures.
+
+    Returns
+    -------
+    Tuple[optional list of strings, dictionary of string to list of strings]
+      First return value is the list of argument types for the head
+      predicate (or `None`), and the second is a dictionary, mapping
+      predicates to the types of their arguments.
+    """
+
     enc = """
 #defined clause/1.
 #defined clause_var/2.
@@ -731,7 +776,7 @@ def load_types(settings):
 
     for x in solver.symbolic_atoms.by_signature('head_pred', arity=2):
         head_pred = x.symbol.arguments[0].name
-        head_arity = x.symbol.arguments[1].number
+        # head_arity = x.symbol.arguments[1].number
 
     head_types = None
     body_types = {}
@@ -820,7 +865,7 @@ def load_types(settings):
 
 # AC: I do not know what this code below really does, but it works
 class suppress_stdout_stderr(object):
-    '''
+    """
     A context manager for doing a "deep suppression" of stdout and stderr in
     Python, i.e. will suppress all print, even if the print originates in a
     compiled C/Fortran sub-function.
@@ -828,11 +873,11 @@ class suppress_stdout_stderr(object):
     to stderr just before a script exits, and after the context manager has
     exited (at least, I think that is why it lets exceptions through).
 
-    '''
+    """
 
     def __init__(self):
         # Open a pair of null files
-        self.null_fds = [os.open(os.devnull, os.O_RDWR) for x in range(2)]
+        self.null_fds = [os.open(os.devnull, os.O_RDWR), os.open(os.devnull, os.O_RDWR)]
         # Save the actual stdout (1) and stderr (2) file descriptors.
         self.save_fds = [os.dup(1), os.dup(2)]
 

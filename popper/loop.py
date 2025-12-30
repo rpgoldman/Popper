@@ -1,23 +1,30 @@
+import asyncio
+import logging
 import time
+import typing
 from collections import defaultdict
 from functools import cache
 from itertools import chain, combinations, permutations
 from logging import Logger
-from typing import Any, List, Optional, Set, Tuple
+from typing import Any, List, Optional, Set, Tuple, cast
 
-from bitarray.util import any_and, ones, subset
+# No type hints for bitarray
+from bitarray.util import any_and, ones, subset  # type: ignore
+from bitarray import frozenbitarray  # type: ignore
 
+from .abs_generate import Generator
 from .bkcons import deduce_bk_cons, deduce_non_singletons, deduce_recalls, deduce_type_cons
 from .combine import Combiner
-from .tester import Tester
-from .util import Constraint, Literal, Settings, calc_prog_size, format_literal, format_prog, format_rule, get_raw_prog, \
-    mdl_score, order_prog, prog_has_invention, prog_is_recursive, remap_variables, rule_is_recursive, timeout
-from .abs_generate import Generator
-from .generate import Generator as Generator1
 from .gen2 import Generator as Generator2
 from .gen3 import Generator as Generator3
+from .generate import Generator as Generator1
+from .tester import Tester
+from .type_defs import NumericRuleBase, NumericRule, NumericLiteral, RuleBase
+from .util import Constraint, Literal, Settings, calc_prog_size, format_literal, format_prog, format_rule, get_raw_prog, \
+    mdl_score, order_prog, prog_has_invention, prog_is_recursive, remap_variables, rule_is_recursive, timeout
 
-def load_solver(settings: Settings, tester: Tester, coverage_pos, coverage_neg, prog_lookup):
+
+def load_solver(settings: Settings, tester: Tester, coverage_pos, coverage_neg, prog_lookup) -> Combiner:
     if settings.debug:
         settings.logger.debug(f'Load exact solver: {settings.solver}')
 
@@ -76,9 +83,45 @@ class Popper():
     tester: Tester
     logger: Logger
     noisy: bool
+    min_size: Optional[int]
+    min_coverage: int
     # the following 2 type hints are conjectural -- rpg
     num_pos: int
     num_neg: int
+
+    # set types I don't know well yet...
+    seen_prog: Set[Any]
+    unsat: Set[Any]
+    tmp: dict[int, bool]  # dict indexed by hash value
+    seen_allsat: Set[Any]
+    pruned2: Set[Any]
+
+    # dictionary from pos_covered_bit_array -> prog_size
+    # it only maintains success sets for programs where fp = 0
+    success_sets: dict[frozenbitarray, int]
+    success_sets_aux: dict[frozenbitarray, int]
+
+    # dictionaries storing hypotheses from which specializations
+    # and generalizations have been made
+    # FIXME: needs more specific type annotations
+    seen_hyp_spec: dict[Any, List]
+    seen_hyp_gen: dict[Any, List]
+
+    generator: Generator
+
+    # pos_covered_bit_array -> prog_size+prog_size2
+    # it only maintains success sets for pairs of programs where fp = 0
+    # FIXME: this comment doesn't align with this being a dictionary
+    # whose values are sets...
+    # paired_success_sets: dict[frozenbitarray, int]
+
+    # FIXME: need more precise characterization of key type
+    cached_prog_size: dict[Any, int]
+
+    # FIXME
+    scores: dict[Any, Tuple]
+
+
     def __init__(self, settings: Settings, tester: Tester):
         self.settings = settings
         self.logger = settings.logger
@@ -107,7 +150,17 @@ class Popper():
             settings.logger.debug("using generate")
         return gen(settings, bkcons)
 
-    def run(self, bkcons):
+    def run(self, bkcons) -> None:
+        # returns nothing -- answers stored in the Settings
+        # object
+        run_logger: Logger = logging.getLogger(__name__)
+        durations: dict[str, list[float]] = self.settings.stats.durations
+
+        # Log information about runtime of various pieces of the loop.
+        def run_log(message: str, key: str, *args):
+            run_logger.debug(message,
+                             *args,
+                             sum(durations['init']) if key in durations else 0)
 
         settings, tester = self.settings, self.tester
         num_pos, num_neg = self.num_pos, self.num_neg = tester.num_pos, tester.num_neg
@@ -120,7 +173,8 @@ class Popper():
             settings.best_prog_score = 0, num_pos, num_neg, 0, 0
             settings.best_mdl = num_pos
             # save hypotheses for which we pruned spec / gen from a certain size only
-            # once we update the best mdl score, we can prune spec / gen from a better size for some of these
+            # once we update the best mdl score, we can prune spec / gen from a better
+            # size for some of these
             self.seen_hyp_spec, self.seen_hyp_gen = defaultdict(list), defaultdict(list)
             max_size = min((1 + settings.max_body) * settings.max_rules, num_pos)
         else:
@@ -137,11 +191,12 @@ class Popper():
 
         # pos_covered_bit_array -> prog_size
         # it only maintains success sets for programs where fp = 0
+        success_sets: dict[frozenbitarray, int]
         success_sets = self.success_sets = {}
         success_sets_aux = self.success_sets_aux = {}
 
         # (pos_covered_bit_array, neg_covered_bitarray) -> prog_size
-        success_sets_noise = {}
+        success_sets_noise: dict[Tuple[frozenbitarray, frozenbitarray], Tuple[RuleBase, int, int, int, int]] = {}
 
         # pos_covered_bit_array -> prog_size+prog_size2
         # it only maintains success sets for pairs of programs where fp = 0
@@ -151,8 +206,8 @@ class Popper():
         covered_by_neg = defaultdict(set)
 
         # program_hash -> coverage (bit_arrary)
-        coverage_pos = {}
-        coverage_neg = {}
+        coverage_pos: dict[int, frozenbitarray] = {}
+        coverage_neg: dict[int, frozenbitarray] = {}
 
         cached_prog_size = self.cached_prog_size = {}
 
@@ -165,25 +220,30 @@ class Popper():
         # could_prune_later = self.could_prune_later = []
         # could_prune_later_rec = self.could_prune_later_rec = []
 
-        to_combine = set()
+        # FIXME: better type hint
+        to_combine: set = set()
 
         self.min_size = None
 
-        last_size = None
+        last_size: Optional[int] = None
 
         min_coverage = self.settings.min_coverage = 1
 
         for size in range(2, max_size + 1):
             if size > settings.max_literals:
-                continue
+                break
 
+
+            run_log("Setting up generator for size %d: init time: %f", 'init', size)
             with settings.stats.duration('init'):
                 generator.update_solver(size)
+            run_log("Done setting up generator for size %d: init time: %f", 'init', size)
 
             while True:
                 pruned_sub_inconsistent = pruned_more_general = False
                 add_spec = add_gen = add_redund1 = add_redund2 = False
                 subsumed = subsumed_by_two = covers_too_few = noisy_subsumed = False
+                spec_size: Optional[int]; gen_size: Optional[int]  # pylint: disable=multiple-statements
                 spec_size = gen_size = None
                 size_change = False
 
@@ -191,12 +251,16 @@ class Popper():
                 new_cons = []
 
                 # generate a program
-                # prog: Optional[Program]
+                prog: Optional[NumericRuleBase]
+                run_log("Generating a program: generate time: %f", 'generate')
                 with settings.stats.duration('generate'):
                     prog = generator.get_prog()
-                    self.logger.debug("Generated prog: {}".format(prog))
-                    if prog is None:
-                        break
+                    self.logger.debug("Generated prog: %s", prog)
+                run_log("Done generating a program: total generate time: %f", 'generate')
+
+                if prog is None:
+                    self.logger.debug("Program generation failed")
+                    break
 
                 prog_size = calc_prog_size(prog)
                 is_recursive = settings.recursion_enabled and prog_is_recursive(prog)
@@ -207,9 +271,10 @@ class Popper():
                 if settings.stats.total_programs % 10000 == 0:
                     tester.janus_clear_cache()
 
-                if settings.debug:
-                    settings.logger.debug(f'Program {settings.stats.total_programs}:')
-                    settings.logger.debug(format_prog(prog, not(settings.recursion_enabled or settings.directions)))
+                settings.logger.debug('Program %d:', settings.stats.total_programs)
+                settings.logger.debug(format_prog(prog,
+                                                  not (settings.recursion_enabled or
+                                                       settings.directions)))
 
                 if last_size is None or prog_size != last_size:
                     size_change = True
@@ -217,15 +282,18 @@ class Popper():
                     settings.search_depth = prog_size
                     settings.logger.info(f'Generating programs of size: {prog_size}')
 
+                run_log("Testing a program: test time: %f", 'test')
                 with settings.stats.duration('test'):
+
                     if settings.noisy:
-                        pos_covered, neg_covered, inconsistent, skipped, skip_early_neg = tester.test_prog_noisy(prog,
-                                                                                                                 prog_size)
+                        pos_covered, neg_covered, inconsistent, skipped, skip_early_neg = \
+                            tester.test_prog_noisy(prog, prog_size)
                     else:
                         pos_covered, inconsistent = tester.test_prog(prog)
                         settings.logger.debug(f"pos_covered: {pos_covered}, inconsistent: {inconsistent}")
                         # @CH: can you explain these?
                         skipped, skip_early_neg = False, False
+                run_log("Done testing program: test time: %f", 'test')
 
                 tp = pos_covered.count(1)
                 fn = num_pos - tp
@@ -240,13 +308,13 @@ class Popper():
                     return
 
                 if settings.noisy and not skipped:
-                    fp = neg_covered.count(1)
+                    fp: int = neg_covered.count(1)
                     tn = num_neg - fp
                     score = tp, fn, tn, fp, prog_size
                     mdl = mdl_score(fn, fp, prog_size)
                     if settings.debug:
                         settings.logger.debug(f'tp:{tp} fn:{fn} tn:{tn} fp:{fp} mdl:{mdl}')
-                    saved_scores[prog] = [fp, fn, prog_size]
+                    saved_scores[prog] = [fp, fn, prog_size]  # pylint: disable=E0606
                     if not min_score:
                         min_score = prog_size
 
@@ -272,6 +340,8 @@ class Popper():
                             add_redund1 = True
 
                 # if consistent, prune specialisations
+                # FIXME: this could be an elif, since we don't need to set
+                # add_spec twice.
                 if not inconsistent and not skipped:
                     add_spec = True
 
@@ -283,24 +353,37 @@ class Popper():
                 # it has an unsat core
                 if not has_invention:
                     if tp < min_coverage or (settings.noisy and tp <= prog_size):
+                        run_log("Starting to check for unsat core at time: %f", 'find mucs')
                         with settings.stats.duration('find mucs'):
                             cons_ = tuple(self.explain_incomplete(prog))
                             new_cons.extend(cons_)
                             pruned_more_general = len(cons_) > 0
+                        run_log("Done check for unsat core at time: %f", 'find mucs')
 
                 if tp > 0 and success_sets and (not settings.noisy or (settings.noisy and fp == 0)):
+                    run_log("Starting to check subsumed and covers_too_few with time: %f",
+                            'check subsumed and covers_too_few')
                     with settings.stats.duration('check subsumed and covers_too_few'):
                         subsumed = pos_covered in success_sets or any(subset(pos_covered, xs) for xs in success_sets)
                         subsumed_by_two = not subsumed and self.check_subsumed_by_two(pos_covered, prog_size)
                         covers_too_few = not subsumed and not subsumed_by_two and not settings.noisy and self.check_covers_too_few(
                             prog_size, pos_covered)
+                    run_log("Done checking subsumed and covers_too_few with time: %f",
+                            'check subsumed and covers_too_few')
 
                     if subsumed or subsumed_by_two or covers_too_few:
                         add_spec = True
                         noisy_subsumed = True
+                else:
+                    run_logger.debug("Failing termination check: %s, %s, tp = %d, fp = %d, success_sets = %s",
+                                     "noisy" if settings.noisy else "not noisy",
+                                     "skipped" if skipped else "not skipped",
+                                     tp,
+                                     fp if 'fp' in locals() else -1,
+                                     bool(success_sets))
 
-                if not settings.noisy and not has_invention and not is_recursive and (
-                        subsumed or subsumed_by_two or covers_too_few):
+                if not (settings.noisy or has_invention or is_recursive) and \
+                       (subsumed or subsumed_by_two or covers_too_few):
 
                     # TODO: FIND MOST GENERAL SUBSUMED RECURSIVE PROGRAM
                     # xs = self.subsumed_or_covers_too_few2(prog, check_coverage=False, check_subsumed=True)
@@ -317,8 +400,12 @@ class Popper():
                     # subprogram that is also subsumed or doesn't cover enough examples
                     # only applies to non-recursive and non-PI programs
                     subsumed_progs = []
+                    run_log("Checking most general subsumed/covers too few. Time is: %f",
+                            'find most general subsumed/covers_too_few')
                     with settings.stats.duration('find most general subsumed/covers_too_few'):
                         subsumed_progs = self.subsumed_or_covers_too_few(prog, seen=set())
+                    run_log("Done checking most general subsumed/covers too few. Time is: %f",
+                            'find most general subsumed/covers_too_few')
                     pruned_more_general = len(subsumed_progs) > 0
 
                     if settings.showcons and not pruned_more_general:
@@ -358,9 +445,11 @@ class Popper():
                             inconsistent = True
 
                             # check whether any subprograms are non-functional
+                            run_log("Checking for non_functional subprograms at %f", 'explain_none_functional')
                             with settings.stats.duration('explain_none_functional'):
                                 cons_ = explain_none_functional(settings, tester, prog)
                                 new_cons.extend(cons_)
+                            run_log("Finished checking for non_functional subprograms at %f", 'explain_none_functional')
 
                 if settings.noisy:
                     # if a program of size k covers less than k positive examples, we can prune its specialisations
@@ -436,7 +525,7 @@ class Popper():
                 if not add_spec and not pruned_more_general and settings.datalog and not settings.recursion_enabled and num_neg > 0:
                     with settings.stats.duration('check_reducible2'):
                         bad_prog = self.check_neg_reducible(prog)
-                        if bad_prog:
+                        if bad_prog is not None:
                             add_spec = True
                             pruned_more_general = True
                             if settings.showcons:
@@ -655,8 +744,10 @@ class Popper():
 
                     # COMBINE
                     # print('call combiner')
+                    run_log("About to run combiner with elapsed time %f", 'combine')
                     with settings.stats.duration('combine'):
                         is_new_solution_found = combiner.update_best_prog(to_combine)
+                    run_log("Done running combiner. New elapsed time %f", 'combine')
 
                     to_combine = set()
 
@@ -698,7 +789,7 @@ class Popper():
 
                             # if size >= settings.max_literals and not settings.order_space:
                             if size >= settings.max_literals:
-                                settings.logger.INFO("Size is greater than max_literals and order_space ireturs not true, stopping")
+                                settings.logger.info("Size is greater than max_literals and order_space i returns not true, stopping")
                                 return
 
                             # AC: sometimes adding these size constraints can take longer
@@ -739,18 +830,22 @@ class Popper():
                     new_cons.append((Constraint.BANISH, prog))
 
                 # CONSTRAIN
+                run_log("About to add constraints to the generator at time %f", 'constrain')
                 with settings.stats.duration('constrain'):
                     generator.constrain(new_cons)
+                run_log("Done adding constraints to the generator at time %f", 'constrain')
 
             # if not pi_or_rec:
             if to_combine:
                 # print('LAST CALL')
                 settings.last_combine_stage = True
-                # TODO: AWFUL: FIX REFACOTRING
+                # TODO: AWFUL: FIX REFACTORING
                 # COMBINE
+                run_log("About to run combiner at time %f", 'combine')
                 with settings.stats.duration('combine'):
                     is_new_solution_found = combiner.update_best_prog(to_combine)
                 to_combine = set()
+                run_log("Done running combiner at time %f", 'combine')
 
                 new_hypothesis_found = is_new_solution_found is not None
 
@@ -774,15 +869,15 @@ class Popper():
 
                         # if size >= settings.max_literals and not settings.order_space:
                         if size >= settings.max_literals:
-                            assert (False)
+                            assert False
             if settings.single_solve:
                 self.logger.info("Popper.run(): Looking for only a single solution and have found one. Terminating.")
                 break
-        assert(len(to_combine) == 0)
+        assert len(to_combine) == 0
         self.logger.info("Popper.run() loop terminated.")
 
     def check_redundant_literal(self, prog):
-        tester, settings = self.tester, self.settings
+        # tester, settings = self.tester, self.settings
 
         if len(prog) > 1:
             return [], False
@@ -816,7 +911,7 @@ class Popper():
 
     def check_redundant_literal_aux(self, body, literal, allsat1, not_all_sat1, depth):
         out = []
-        prog = frozenset([(None, body)])
+        # prog = frozenset([(None, body)])
 
         if len(body) == 0:
             return out
@@ -875,7 +970,7 @@ class Popper():
 
         return [(to_prune, depth > 0)]
 
-    def check_neg_reducible(self, prog):
+    def check_neg_reducible(self, prog) -> frozenset | None:
         tester = self.tester
         settings = self.settings
 
@@ -887,13 +982,12 @@ class Popper():
                 head_vars.add(arg)
 
             for literal in body:
-                literal_p, literal_args = literal
+                _literal_p, literal_args = literal
                 literal_args = set(literal_args)
 
                 if len(body) == 1:
                     # AC: SPECIAL CASE FOR A SINGLE BODY LITERAL IMPLIED BY THE HEAD
-                    if settings.non_datalog_flag and literal_args.issubset(head_vars) and tester.diff_subs_single(
-                            literal):
+                    if settings.non_datalog_flag and literal_args.issubset(head_vars) and tester.diff_subs_single(literal):
                         bad_rule = (head, frozenset([literal]))
                         bad_prog = frozenset([bad_rule])
                         return bad_prog
@@ -902,7 +996,7 @@ class Popper():
                 body_ = frozenset(body) - {literal}
                 body_vars = set()
 
-                for p, args in body_:
+                for _p, args in body_:
                     for arg in args:
                         body_vars.add(arg)
 
@@ -919,7 +1013,8 @@ class Popper():
                     continue
 
                 if tester.is_neg_reducible(body_, literal):
-                    return frozenset([rule])
+                    return new_prog
+        return None
 
     def filter_combine_programs(self, combiner, to_combine):
 
@@ -966,7 +1061,7 @@ class Popper():
                 return True
         return False
 
-    def check_covers_too_few(self, prog_size, pos_covered):
+    def check_covers_too_few(self, prog_size: int, pos_covered: frozenbitarray) -> bool:
 
         tmp = self.tmp
         k1 = hash((prog_size, pos_covered))
@@ -985,7 +1080,7 @@ class Popper():
         tmp[k2] = v
         return v
 
-    def check_covers_too_few_(self, prog_size, pos_covered):
+    def check_covers_too_few_(self, prog_size, pos_covered) -> bool:
         num_pos = self.num_pos
 
         len_pos_covered = pos_covered.count(1)
@@ -1099,14 +1194,14 @@ class Popper():
         return False
 
     # find unsat cores
-    def explain_incomplete(self, prog):
+    def explain_incomplete(self, prog: NumericRuleBase) -> typing.Generator[Tuple[int, list], None, None]:
 
         # print('')
         # print('')
         # print('EXPLAIN_INCOMPLETE')
         # print(format_prog(prog))
 
-        settings, tester = self.settings, self.tester
+        settings = self.settings
         unsat_cores = self.explain_totally_incomplete(prog)
 
         for subprog, unsat_body in unsat_cores:
@@ -1116,7 +1211,7 @@ class Popper():
                     print('\n')
                 for i, rule in enumerate(subprog):
                     # print('\t', format_rule(rule), '\t', f'unsat')
-                    print('\t', f'UNSAT:', '\t', format_rule(rule))
+                    print('\t', 'UNSAT:', '\t', format_rule(rule))
 
             if unsat_body:
                 _, body = list(subprog)[0]
@@ -1133,7 +1228,7 @@ class Popper():
             yield (Constraint.REDUNDANCY_CONSTRAINT2, [remap_variables(rule) for rule in subprog])
 
     # given a program with more than one rule, look for inconsistent subrules/subprograms
-    def explain_inconsistent(self, prog):
+    def explain_inconsistent(self, prog: NumericRuleBase):
         base = []
         rec = []
 
@@ -1160,8 +1255,11 @@ class Popper():
                 if self.tester.test_prog_inconsistent(subprog):
                     yield (Constraint.GENERALISATION, subprog)
 
-    def build_constraints_previous_hypotheses(self, score, best_size):
-        generator, num_pos, num_neg = self.generator, self.num_pos, self.num_neg,
+    def build_constraints_previous_hypotheses(self,
+                                              # tp, fn tn, fp, size
+                                              score: int, # actually, MDL
+                                              best_size: int):
+        num_pos, num_neg = self.num_pos, self.num_neg,
         seen_hyp_spec, seen_hyp_gen = self.seen_hyp_spec, self.seen_hyp_gen
         cons = []
         # print(f"new best score {score}")
@@ -1197,13 +1295,13 @@ class Popper():
                 seen_hyp_gen[k].remove(to_del)
         return cons
 
-    def subsumed_or_covers_too_few(self, prog, seen:Optional[Set] = None):
+    def subsumed_or_covers_too_few(self, prog: RuleBase, seen: Optional[Set] = None) -> Set[Tuple[RuleBase, str]]:
         tester, success_sets, settings = self.tester, self.success_sets, self.settings
-        head, body = list(prog)[0]
-        body = list(body)
+        head, tbody = list(prog)[0]
+        body = list(tbody)
 
         if len(body) == 0:
-            return []
+            return set()
 
         out = set()
         if seen is None:
@@ -1212,8 +1310,8 @@ class Popper():
 
         # try the body with one literal removed (the literal at position i)
         for i in range(len(body)):
-            new_body = body[:i] + body[i + 1:]
-            new_body = frozenset(new_body)
+            tnew_body = body[:i] + body[i + 1:]
+            new_body = frozenset(tnew_body)
 
             if len(new_body) == 0:
                 continue
@@ -1225,7 +1323,7 @@ class Popper():
             seen.add(k1)
 
             new_rule = (head, new_body)
-            new_prog = frozenset({new_rule})
+            new_prog: RuleBase = frozenset({new_rule})
 
             # ensure at least one head variable is in the body
             if not settings.non_datalog_flag and not any(
@@ -1284,7 +1382,7 @@ class Popper():
                 assert (False)
         return out
 
-    def find_variants(self, rule):
+    def find_variants(self, rule: NumericRule) -> typing.Generator[frozenset[NumericLiteral], None, None]:
         head, body = rule
         _head_pred, head_args = head
         head_arity = len(head_args)
@@ -1295,12 +1393,12 @@ class Popper():
             new_body = []
             for pred, args in body:
                 new_args = tuple(xs[arg] for arg in args)
-                new_literal = (pred, new_args)
+                new_literal = NumericLiteral(pred, new_args)
                 new_body.append(new_literal)
             yield frozenset(new_body)
 
     def build_test_prog(self, subprog):
-        directions = self.settings.directions
+        # directions = self.settings.directions
         test_prog = []
         for head, body in subprog:
             if head:
@@ -1469,11 +1567,11 @@ class Popper():
                         # find the first ground non-recursive body literal and stop
                         selected_literal = literal
                         break
-                    elif selected_literal == None:
+                    elif selected_literal is None:
                         # otherwise use the recursive body literal
                         selected_literal = literal
 
-                if selected_literal == None:
+                if selected_literal is None:
                     return False
 
                 pred, args = selected_literal
@@ -1503,7 +1601,7 @@ class Popper():
                         selected_literal = literal
                         break
 
-                if selected_literal == None:
+                if selected_literal is None:
                     return False
 
                 grounded_variables = grounded_variables.union(selected_literal.arguments)
@@ -1531,7 +1629,7 @@ class Popper():
         for rule in prog:
             h, b = rule
 
-            if h == None:
+            if h is None:
                 return False
 
             if rule_is_recursive(rule):
@@ -1548,16 +1646,18 @@ class Popper():
 
         return True
 
-    def print_incomplete_solution2(self, prog, tp, fn, tn, fp, size):
-        self.logger.info('*' * 20)
-        self.logger.info('New best hypothesis:')
-        if self.noisy:
-            self.logger.info(f'tp:{tp} fn:{fn} tn:{tn} fp:{fp} size:{size} mdl:{size + fn + fp}')
-        else:
-            self.logger.info(f'tp:{tp} fn:{fn} tn:{tn} fp:{fp} size:{size}')
-        for rule in order_prog(prog):
-            self.logger.info(format_rule(self.settings.order_rule(rule)))
-        self.logger.info('*' * 20)
+    # never called.  If we wanted a definition, it could be just
+    # settings.print_incomplete_solution2(self.settings, prog, tp, fn, tn, fp, size)
+    # def print_incomplete_solution2(self, prog, tp: int, fn: int, tn: int, fp: int, size: int) -> None:
+    #     self.logger.info('*' * 20)
+    #     self.logger.info('New best hypothesis:')
+    #     if self.noisy:
+    #         self.logger.info(f'tp:{tp} fn:{fn} tn:{tn} fp:{fp} size:{size} mdl:{size + fn + fp}')
+    #     else:
+    #         self.logger.info(f'tp:{tp} fn:{fn} tn:{tn} fp:{fp} size:{size}')
+    #     for rule in order_prog(prog):
+    #         self.logger.info(format_rule(self.settings.order_rule(rule)))
+    #     self.logger.info('*' * 20)
 
     def needs_datalog(self, prog):
         if not self.settings.has_directions:
@@ -1599,7 +1699,7 @@ def get_bk_cons(settings: Settings, tester: Tester):
         settings.body_preds.remove((p, a))
 
     # if settings.datalog:
-    settings.logger.debug(f'Loading recalls')
+    settings.logger.debug('Loading recalls')
     with settings.stats.duration('recalls'):
         recalls = deduce_recalls(settings)
 
@@ -1629,7 +1729,7 @@ def get_bk_cons(settings: Settings, tester: Tester):
         bkcons.extend(type_cons)
 
     if not settings.datalog:
-        settings.logger.debug(f'Loading recalls FAILURE')
+        settings.logger.debug('Loading recalls FAILURE')
     else:
         import signal
 
@@ -1638,25 +1738,29 @@ def get_bk_cons(settings: Settings, tester: Tester):
 
         settings.logger.debug(f'Loading bkcons')
         xs = []
+        settings.logger.debug("bkcons timeout is %d", settings.bkcons_timeout)
         with settings.stats.duration('bkcons'):
             signal.signal(signal.SIGALRM, handler)
             signal.alarm(settings.bkcons_timeout)
             try:
                 xs = deduce_bk_cons(settings)
-            except TimeoutError as _exc:
+            except TimeoutError:
                 settings.logger.debug(f'Loading bkcons FAILURE')
             finally:
                 signal.alarm(0)
         if settings.showcons:
-            for x in sorted(xs):
-                print('BKCON', x)
+            if xs:
+                for x in xs:
+                    settings.logger.info('bkcons', x)
+            else:
+                settings.logger.info('No bkcons')
         bkcons.extend(xs)
     return bkcons
 
 
-def learn_solution(settings):
+def learn_solution(settings: Settings) -> Tuple[Any, Any, Any]:
     t1 = time.time()
-    settings.nonoise = not settings.noisy
+    settings.nonoise = not settings.noisy  # this is consumed by the combiner
     settings.solution_found = False
 
     with settings.stats.duration('load data'):
@@ -1664,12 +1768,14 @@ def learn_solution(settings):
 
     bkcons = get_bk_cons(settings, tester)
     time_so_far = time.time()-t1
-    timeout(settings, popper, (settings, tester, bkcons), timeout_duration=int(settings.timeout-time_so_far),)
+    timeout_bound: int = max(0, int(settings.timeout - time_so_far))
+    timeout(settings, popper, (settings, tester, bkcons), timeout_duration=timeout_bound)
     tester.destroy_prolog_module()
     return settings.solution, settings.best_prog_score, settings.stats
 
 
 def generalisations(prog, allow_headless=True, recursive=False):
+    # pylint: disable=C0200
     if len(prog) == 1:
         rule = list(prog)[0]
         head, body = rule
@@ -1682,7 +1788,7 @@ def generalisations(prog, allow_headless=True, recursive=False):
 
         if (recursive and len(body) > 2 and head) or (not recursive and len(body) > 1):
             body = list(body)
-            for i in range(len(body)):
+            for i in range(len(body)):  # noqa: C0200
                 # do not remove recursive literals
                 if recursive and body[i].predicate == head.predicate:
                     continue
@@ -1693,7 +1799,7 @@ def generalisations(prog, allow_headless=True, recursive=False):
 
     else:
         prog = list(prog)
-        for i in range(len(prog)):
+        for i in range(len(prog)):  # noqa: C0200
             subrule = prog[i]
             recursive = rule_is_recursive(subrule)
             for new_subrule in generalisations([subrule], allow_headless=False, recursive=recursive):
@@ -1711,7 +1817,7 @@ def tmp(prog):
     return True
 
 
-def explain_none_functional(settings, tester, prog):
+def explain_none_functional(settings: Settings, tester: Tester, prog: NumericRuleBase):
     new_cons = []
 
     if len(prog) == 1:
@@ -1755,7 +1861,7 @@ def rule_subsumes(r1, r2):
     # r1 subsumes r2 if r1 is a subset of r2
     h1, b1 = r1
     h2, b2 = r2
-    if h1 != None and h2 == None:
+    if h1 is not None and h2 is None:
         return False
     return b1.issubset(b2)
 
