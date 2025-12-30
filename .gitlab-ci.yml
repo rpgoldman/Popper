@@ -28,7 +28,7 @@ prt-test:
       POPPER_DIR: $CI_PROJECT_DIR
   artifacts:
     paths:
-      - /popper-prt/results/*
+      - results/*
     expire_in: 30 days
     when: always
   script:
@@ -37,3 +37,4 @@ prt-test:
     - export PATH="/prt:${PATH}"
     # - which timestamp
     - MAXPARALLEL=16 ./parallel-prt.sh
+    - mv results ${CI_PROJECT_DIR}
