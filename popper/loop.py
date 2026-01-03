@@ -1007,13 +1007,12 @@ class Popper():
                     continue
 
                 new_rule = (head, body_)
-                new_prog = frozenset([new_rule])
 
                 if not self.has_valid_directions(new_rule):
                     continue
 
                 if tester.is_neg_reducible(body_, literal):
-                    return new_prog
+                    return frozenset([rule])
         return None
 
     def filter_combine_programs(self, combiner, to_combine):
