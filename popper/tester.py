@@ -7,16 +7,16 @@ from collections import defaultdict
 from contextlib import contextmanager
 from functools import cache
 from itertools import product
-from typing import Any, Collection, Dict, Iterable, Iterator, Optional, cast, Tuple, TypedDict, TypeAlias, Literal as TypingLiteral
+from typing import Any, Collection, Dict, Iterator, Optional, cast, Tuple, TypedDict, Literal as TypingLiteral
+
 from bitarray import bitarray, frozenbitarray
 from bitarray.util import ones
-from janus_swi import query_once, consult, cmd
-from janus_swi.janus import PrologError
+from janus_swi import query_once, consult
 
-from .util import Literal, calc_prog_size, calc_rule_size, format_rule, order_prog, prog_hash, prog_is_recursive, \
-    Settings
 from .resources import resource_filename, close_resource_file
-from .type_defs import RuleBase, Rule
+from .type_defs import RuleBase, Rule, Literal, NumericLiteral, NumericRuleBase, NumericRule
+from .util import calc_prog_size, calc_rule_size, format_rule, order_prog, prog_hash, prog_is_recursive, \
+    Settings
 
 logger: logging.Logger = logging.getLogger()
 
@@ -122,22 +122,28 @@ class Tester:
     def janus_clear_cache(self) -> QueryOnceReturn:
         return self.query_once('retractall(janus:py_call_cache(_String,_Input,_TV,_M,_Goal,_Dict,_Truth,_OutVars))')
 
-    def parse_single_rule(self, prog: RuleBase) -> Tuple[str, str]:
-        rule = next(iter(prog))
+    def parse_single_rule(self, prog: NumericRuleBase) -> Tuple[str, str]:
+        rule: NumericRule  = next(iter(prog))
         head, ordered_body = self.settings.order_rule(rule)
         atom_str = format_literal_janus(head)
         body_str = ','.join(format_literal_janus(literal) for literal in ordered_body)
         return atom_str, body_str
 
     @cache
-    def parse_body(self, body):
+    def parse_body(self,
+                   body: frozenset[NumericLiteral] | frozenset[Literal]) -> str:
+        if not (all(map(lambda x: isinstance(x, NumericLiteral), body)) or \
+                all(map(lambda x: isinstance(x, Literal), body))):
+            raise TypeError(f"Body argument must be an iterable of either clingo Literals, or NumericLiterals. Got {body}")
         _, ordered_body = self.settings.order_rule((None, body))
         body_str = ','.join(format_literal_janus(literal) for literal in ordered_body)
         return body_str
 
-    def test_prog_noisy(self, prog: RuleBase, prog_size: int) -> Tuple[int, int, int, int]:
+    def test_prog_noisy(self, prog: NumericRuleBase, prog_size: int) -> \
+            Tuple[frozenbitarray, frozenbitarray, bool, bool, bool]:
         settings = self.settings
-        neg_covered = None
+        neg_covered: Optional[frozenbitarray] = None
+        pos_covered: frozenbitarray
         skipped, skip_early_neg = False, False
         inconsistent: bool = False
 
@@ -165,8 +171,7 @@ class Tester:
 
         return pos_covered, neg_covered, inconsistent, skipped, skip_early_neg
 
-    def test_prog(self, prog: RuleBase) -> Tuple[frozenbitarray, bool]:
-
+    def test_prog(self, prog: NumericRuleBase) -> Tuple[frozenbitarray, bool]:
         # sourcery skip: no-conditionals-in-tests
         if self.settings.recursion_enabled or self.settings.pi_enabled:
 
@@ -211,7 +216,7 @@ class Tester:
         self.cached_pos_covered[hash(prog)] = pos_covered
         return pos_covered, inconsistent
 
-    def test_prog_all(self, prog: RuleBase) -> Tuple[frozenbitarray, frozenbitarray]:
+    def test_prog_all(self, prog: NumericRuleBase) -> Tuple[frozenbitarray, frozenbitarray]:
         if len(prog) == 1:
             atom_str, body_str = self.parse_single_rule(prog)
             q = f'findall(_ID, (pos_index(_ID, {atom_str}), ({body_str}->  true)), S)'
@@ -222,7 +227,7 @@ class Tester:
                 neg_covered = self.query_once(q)['S']
         else:
             with self.using(prog):
-                res = self.query_once(f'pos_covered(S1), neg_covered(S2)')
+                res = self.query_once('pos_covered(S1), neg_covered(S2)')
             pos_covered = res['S1']
             neg_covered = res['S2']
 
@@ -384,7 +389,7 @@ class Tester:
         else:
             with self.using(prog):
                 if self.settings.noisy:
-                    return self.query_once(f'covers_at_least_k_pos(K)',{'K':calc_prog_size(prog)})['truth']
+                    return self.query_once('covers_at_least_k_pos(K)',{'K':calc_prog_size(prog)})['truth']
                 else:
                     return self.bool_query('sat')
 

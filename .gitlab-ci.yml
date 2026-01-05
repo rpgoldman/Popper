@@ -37,4 +37,6 @@ prt-test:
     - export PATH="/prt:${PATH}"
     # - which timestamp
     - MAXPARALLEL=16 ./parallel-prt.sh
+  after_script:
+    - cd /popper-prt
     - mv results ${CI_PROJECT_DIR}

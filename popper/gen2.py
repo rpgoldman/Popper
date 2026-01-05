@@ -1,6 +1,6 @@
 import re
 from itertools import permutations
-from typing import Any, Set, Tuple, Optional, List
+from typing import Any, Set, Tuple, Optional, List, Iterable
 
 import clingo
 import clingo.script
@@ -182,8 +182,9 @@ class Generator(AbstractGenerator):
         size_con = [(AbstractGenerator.atom_to_symbol("size", (size,)), True)]
         self.model.context.add_nogood(size_con)
 
-    def constrain(self, tmp_new_cons):
-        new_ground_cons = set()
+    def constrain(self, tmp_new_cons: Iterable[Tuple[Constraint, Any]]) -> None:
+        # set of nogoods
+        new_ground_cons: Set[List[Tuple[bool, str, Any]]] = set()
         logger = self.settings.logger
 
         for xs in tmp_new_cons:
@@ -209,6 +210,8 @@ class Generator(AbstractGenerator):
                 cons_ = self.unsat_constraint2(con_prog)
                 logger.debug(f"constraint: unsat: {con_prog}")
                 new_ground_cons.update(cons_)
+            else:
+                raise ValueError(f"Expected a constraint type (integer 1-7), got {con_type}")
 
         self.instantiate_constraints(new_ground_cons)
 
