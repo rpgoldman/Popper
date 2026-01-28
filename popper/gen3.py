@@ -1,3 +1,4 @@
+import logging
 import operator
 import re
 from collections import defaultdict
@@ -212,7 +213,9 @@ class Generator(AbstractGenerator):
         self.new_ground_cons = set()
         self.new_seen_rules = set()
 
-        self.set_handle(True)
+        logger = logging.getLogger()
+        logger.debug("Resetting solver (set_handle) with reset=True")
+        self.set_handle(reset=True)
 
     def update_number_of_literals(self, size):
         # 1. Release those that have already been assigned
@@ -241,7 +244,7 @@ class Generator(AbstractGenerator):
             return
         self.pruned_sizes.add(size)
         size_con = [(AbstractGenerator.atom_to_symbol("size", (size,)), True)]
-        self.model.context.add_nogood(size_con)
+        self.add_nogood(size_con)
 
     def constrain(self, tmp_new_cons):
         new_cons = set()

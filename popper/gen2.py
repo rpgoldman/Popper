@@ -1,3 +1,4 @@
+import logging
 import re
 from itertools import permutations
 from typing import Any, Set, Tuple, Optional, List, Iterable
@@ -55,7 +56,9 @@ class Generator(AbstractGenerator):
         bias_text = re.sub(r'max_body\(\d*\).', '', bias_text)
         bias_text = re.sub(r'max_clauses\(\d*\).', '', bias_text)
         # AC: NEED TO COMPLETELY REFACTOR THIS CODE
+        logger = settings.logger
         for p, a in settings.pointless:
+            logger.debug("Removing pointless body_pred {}/{}".format(p, a))
             bias_text = re.sub(rf'body_pred\({p},\s*{a}\)\.', '', bias_text)
             bias_text = re.sub(rf'constant\({p},.*?\).*', '', bias_text, flags=re.MULTILINE)
         encoding.append(bias_text)
@@ -161,7 +164,7 @@ class Generator(AbstractGenerator):
         pass
 
     def get_prog(self):
-        self.settings.logger.debug(f"Setting handle: handle is {self.handle} clingo handle is {self.clingo_handle}")
+        self.settings.logger.debug(f"Setting handle, reset = False: handle is {self.handle} clingo handle is {self.clingo_handle}")
         self.set_handle()
         self.settings.logger.debug(f"After setting handle: handle is {self.handle} clingo handle is {self.clingo_handle}")
 
@@ -180,7 +183,7 @@ class Generator(AbstractGenerator):
             return
         self.pruned_sizes.add(size)
         size_con = [(AbstractGenerator.atom_to_symbol("size", (size,)), True)]
-        self.model.context.add_nogood(size_con)
+        self.add_nogood(size_con)
 
     def constrain(self, tmp_new_cons: Iterable[Tuple[Constraint, Any]]) -> None:
         # set of nogoods

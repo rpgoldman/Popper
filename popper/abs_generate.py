@@ -9,6 +9,7 @@ from .type_defs import Literal, NumericLiteral, RuleBase, NumericRule, NumericRu
 if TYPE_CHECKING:
     from .util import Settings
 
+
 class Generator(abc.ABC):
     settings: "Settings"
     solver: clingo.Control
@@ -20,8 +21,8 @@ class Generator(abc.ABC):
 
     def set_handle(self,
                    reset: bool = False,
-                   assumptions: List[Tuple[clingo.Symbol, bool]] |
-                                List[int] |
+                   assumptions: Sequence[Tuple[clingo.Symbol, bool]] |
+                                Sequence[int] |
                                 None = None) -> None:
         """
         Reset the Generator's paired Clingo handles.
@@ -42,7 +43,7 @@ class Generator(abc.ABC):
             else:
                 clingo_handle = self.solver.solve(yield_=True, assumptions=assumptions)
             self.clingo_handle = clingo_handle
-            self.handle = iter(clingo_handle)
+            self.handle = iter(clingo_handle) # this has the effect of calling clingo_handle.resume()
         else:
             assert self.clingo_handle is not None, \
                 "This generator's model iterator is bound, but not the corresponding clingo handle."
@@ -195,8 +196,6 @@ class Generator(abc.ABC):
         return frozenset(prog)
 
     def instantiate_constraints(self, new_ground_cons: Iterable[List[Tuple[bool, str, Any]]]) -> None:
-        assert self.model
-        tmp: Callable[[List[Tuple[clingo.Symbol, bool]]], None] = self.model.context.add_nogood
         cached_clingo_atoms = self.cached_clingo_atoms
         for ground_body in new_ground_cons:
             nogood = []
@@ -208,4 +207,22 @@ class Generator(abc.ABC):
                     x = (Generator.atom_to_symbol(pred, args), sign)
                     cached_clingo_atoms[k] = x
                 nogood.append(x)
-            tmp(nogood)
+            self.add_nogood(nogood)
+
+    def add_nogood(self,  nogood: list[Tuple[clingo.Symbol, bool]]) -> None:
+        """
+        Add a nogood to clingo using its `model` property.
+
+        Notes
+        -----
+        This is factored out of `Generator.instantiate_constraints()` to enable hooking it
+        from specializing classes.
+
+        Parameters
+        ----------
+        nogood : list[clingo.Symbol]
+          Conjunction of literals that constitutes a nogood.
+        """
+        assert self.model
+        tmp: Callable[[List[Tuple[clingo.Symbol, bool]]], None] = self.model.context.add_nogood
+        tmp(nogood)

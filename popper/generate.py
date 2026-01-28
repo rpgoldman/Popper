@@ -411,7 +411,7 @@ class Generator(AbstractGenerator):
     def prune_size(self, size):
         size_con = [(AbstractGenerator.atom_to_symbol("size", (size,)), True)]
         # print('moo', size)
-        self.model.context.add_nogood(size_con)
+        self.add_nogood(size_con)
 
     # @profile
     def get_ground_rules(self, rule):
