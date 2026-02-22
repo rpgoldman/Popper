@@ -52,10 +52,12 @@ class Generator(AbstractGenerator):
         self.solver = solver
 
     def init_solver(self, encoding) -> clingo.Control:
+        solve_arg = [] if self.settings.num_cores == 1 \
+            else [f"--parallel-mode={self.settings.num_cores}"]
         if self.settings.single_solve:
-            solver = clingo.Control(['--heuristic=Domain', '-Wnone'])
+            solver = clingo.Control(['--heuristic=Domain', '-Wnone'] + solve_arg)
         else:
-            solver = clingo.Control(['-Wnone'])
+            solver = clingo.Control(['-Wnone'] + solve_arg)
             NUM_OF_LITERALS = """
             %%% External atom for number of literals in the program %%%%%
             #external size_in_literals(n).
@@ -114,7 +116,7 @@ class Generator(AbstractGenerator):
         if settings.max_literals < max_size:
             encoding.append(f'custom_max_size({settings.max_literals}).')
         if settings.pi_enabled:
-            encoding.append(f'#show head_literal/4.')
+            encoding.append('#show head_literal/4.')
         if settings.noisy:
             encoding.append("""
             program_bounds(0..K):- max_size(K).

@@ -310,6 +310,7 @@ class Settings:  # pylint: disable=too-many-instance-attributes
     solution: Optional[NumericRuleBase]
     nonoise: bool
     noisy: bool
+    num_cores: int # How many cores should clingo use?
 
     # domain features
     has_directions: bool
@@ -331,7 +332,7 @@ class Settings:  # pylint: disable=too-many-instance-attributes
                  timeout=TIMEOUT, quiet=False, eval_timeout=EVAL_TIMEOUT, max_examples=MAX_EXAMPLES, max_body=None,
                  max_rules=None, max_vars=None, functional_test=False, kbpath: Optional[str]=None, ex_file=False, bk_file=False,
                  bias_file=False, showcons=False, no_bias=False, order_space=False, noisy=False, batch_size=BATCH_SIZE,
-                 solver='rc2', anytime_solver=None, anytime_timeout=ANYTIME_TIMEOUT, show_failures=False) -> None:
+                 solver='rc2', anytime_solver=None, anytime_timeout=ANYTIME_TIMEOUT, show_failures=False, num_cores=1) -> None:
 
         if cmd_line:
             args = parse_args()
@@ -417,6 +418,7 @@ class Settings:  # pylint: disable=too-many-instance-attributes
         self.no_bias = no_bias
         self.order_space = order_space
         self.noisy = noisy
+        self.num_cores = num_cores
 
         if noisy:
             self.batch_size = 20000
@@ -432,7 +434,10 @@ class Settings:  # pylint: disable=too-many-instance-attributes
         self.solution = None
         self.best_prog_score = None
 
-        solver = clingo.Control(['-Wnone'])
+        if num_cores == 1:
+            solver = clingo.Control(['-Wnone'])
+        else:
+            solver = clingo.Control(['-Wnone', f"--parallel-mode={num_cores}"])
         with open(self.bias_file) as f:
             solver.add('bias', [], f.read())
         solver.add('bias', [], """
@@ -768,7 +773,11 @@ def load_types(settings: Settings) -> Tuple[Optional[list[str]],
 #defined clause_var/2.
 #defined var_type/3."""
     # solver = clingo.Control()
-    solver = clingo.Control(['-Wnone'])
+    # solver = clingo.Control(['-Wnone'])
+    if settings.num_cores == 1:
+        solver = clingo.Control(['-Wnone'])
+    else:
+        solver = clingo.Control(['-Wnone', f"--parallel-mode={settings.num_cores}"])
     with open(settings.bias_file) as f:
         solver.add('bias', [], f.read())
     solver.add('bias', [], enc)

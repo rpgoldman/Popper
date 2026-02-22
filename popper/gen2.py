@@ -40,7 +40,9 @@ class Generator(AbstractGenerator):
         self.solver = solver
 
     def init_solver(self, encoding) -> clingo.Control:
-        solver = clingo.Control(['--heuristic=Domain', '-Wnone'])
+        solve_arg = [] if self.settings.num_cores == 1 \
+            else [f"--parallel-mode={self.settings.num_cores}"]
+        solver = clingo.Control(['--heuristic=Domain', '-Wnone'] + solve_arg)
         solver.configuration.solve.models = 0
         solver.add('base', [], encoding)
         solver.ground([('base', [])])
