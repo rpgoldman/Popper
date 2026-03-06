@@ -1,17 +1,15 @@
 import logging
 import operator
 import re
-from collections import defaultdict
 from typing import Optional, List
 
 import clingo
 import clingo.configuration
 import clingo.script
-
+from importlib import resources
+from collections import defaultdict
+from . util import rule_is_recursive, Constraint, Literal
 from .abs_generate import Generator as AbstractGenerator
-from .resources import resource_string
-from .util import rule_is_recursive, Constraint, Literal
-
 clingo.script.enable_python()
 from itertools import permutations
 
@@ -75,7 +73,7 @@ class Generator(AbstractGenerator):
 
     def build_encoding(self, bkcons, settings):
         encoding = []
-        alan = resource_string(__name__, "lp/alan-old.pl").decode()
+        alan = resources.files(__package__).joinpath("lp/alan-old.pl").read_text()
         encoding.append(alan)
         with open(settings.bias_file) as f:
             bias_text = f.read()

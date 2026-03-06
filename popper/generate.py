@@ -5,9 +5,8 @@ from typing import Optional, Sequence, Set, Dict, List
 
 import clingo
 import clingo.script
-
-from .util import rule_is_recursive, Constraint, Literal, remap_variables, Settings
-
+from importlib import resources
+from . util import rule_is_recursive, Constraint, Literal, remap_variables, Settings
 clingo.script.enable_python()
 # ruff: noqa: E402
 # flake8: noqa: E402
@@ -16,7 +15,6 @@ from itertools import permutations
 import dataclasses
 from .abs_generate import Generator as AbstractGenerator
 from . type_defs import Rule, RuleBase
-from .resources import resource_string
 
 @dataclasses.dataclass(frozen=True)
 class Var:
@@ -155,8 +153,8 @@ class Generator(AbstractGenerator):
 
     def build_encoding(self, bkcons, settings):
         encoding = []
-        alan = resource_string(__name__, "lp/alan-old.pl").decode()
-        # alan = pkg_resources.resource_string(__name__, "lp/alan.pl").decode()
+        alan = resources.files(__package__).joinpath("lp/alan-old.pl").read_text()
+        # alan = resources.files(__package__).joinpath("lp/alan.pl").read_text()
         encoding.append(alan)
         with open(settings.bias_file) as f:
             bias_text = f.read()

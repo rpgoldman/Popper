@@ -6,6 +6,7 @@ import uuid
 from collections import defaultdict
 from contextlib import contextmanager
 from functools import cache
+from importlib import resources
 from itertools import product
 from typing import Any, Collection, Dict, Iterator, Optional, cast, Tuple, TypedDict, Literal as TypingLiteral
 
@@ -13,7 +14,6 @@ from bitarray import bitarray, frozenbitarray
 from bitarray.util import ones
 from janus_swi import query_once, consult
 
-from .resources import resource_filename, close_resource_file
 from .type_defs import RuleBase, Rule, Literal, NumericLiteral, NumericRuleBase, NumericRule
 from .util import calc_prog_size, calc_rule_size, format_rule, order_prog, prog_hash, prog_is_recursive, \
     Settings
@@ -49,7 +49,7 @@ class Tester:
         self.string_module = f"prog_{uuid.uuid4().hex}"
         bk_pl_path = self.settings.bk_file
         exs_pl_path = self.settings.ex_file
-        test_pl_path = str(resource_filename(__name__, "lp/test.pl"))
+        test_pl_path = str(resources.files(__package__).joinpath("lp/test.pl"))
         assert isinstance(test_pl_path, str)
         results: Dict[str, Any] = query_once('use_module(library(modules))')
         if not results['truth']:
@@ -66,7 +66,6 @@ class Tester:
             if os.name == 'nt': # if on Windows, SWI requires escaped directory separators
                 x = x.replace('\\', '\\\\')
             self.consult(x)
-            close_resource_file(x)
 
         self.query_once('load_examples', error_on_failure=True)
 

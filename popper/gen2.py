@@ -1,14 +1,14 @@
-import logging
 import re
-from itertools import permutations
 from typing import Any, Set, Tuple, Optional, List, Iterable
 
 import clingo
 import clingo.script
+from importlib import resources
+from . util import Constraint, Literal
+from itertools import permutations
 
 from .abs_generate import Generator as AbstractGenerator
-from .resources import resource_string
-from .util import Constraint, Literal, Settings
+from .util import Settings
 
 DEFAULT_HEURISTIC = """
 #heuristic size(N). [1000-N,true]
@@ -50,7 +50,7 @@ class Generator(AbstractGenerator):
 
     def build_encoding(self, bkcons, settings):
         encoding = []
-        alan = resource_string(__name__, "lp/alan.pl").decode()
+        alan = resources.files(__package__).joinpath("lp/alan.pl").read_text()
         encoding.append(alan)
         with open(settings.bias_file) as f:
             bias_text = f.read()
