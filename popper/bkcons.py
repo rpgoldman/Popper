@@ -1,3 +1,5 @@
+import string
+
 import clingo
 import clingo.script
 import numbers
@@ -26,6 +28,20 @@ TIDY_OUTPUT = """
 #defined clause/1.
 """
 
+def format_tuple(items):
+    """Format items as a Clingo/Prolog tuple, e.g., (V0,V1) or (V0,)."""
+    items = list(items)
+    s = ','.join(map(str, items))
+    return f'({s},)' if len(items) == 1 else f'({s})'
+
+def canonicalise_vars(*var_seqs):
+    """Rename variables to A, B, C... in first-appearance order across all sequences."""
+    lookup = {}
+    def get_var(v):
+        if v not in lookup:
+            lookup[v] = string.ascii_uppercase[len(lookup)]
+        return lookup[v]
+    return [tuple(get_var(v) for v in vs) for vs in var_seqs]
 # def get_bias_preds(settings):
 #     solver = clingo.Control(['-Wnone'])
 #     with open(settings.bias_file) as f:
@@ -69,164 +85,62 @@ def uses_in_order(xs, ys):
             return False
     return True
 
-def build_props(settings, arities, tester=None):
+#? The original build props function in combination with build_props2 was causing a lot of memory usage and was slow. The new build_props function is taken from the original code. 
+# https://github.com/logic-and-learning-lab/Popper/blob/80468edbb323257edd6f0f07a5176db4cc0682a9/popper/bkcons.py#L24
+def build_props(settings, arities):
 
-    myvars = all_myvars[:settings.max_vars]
+    """Generate potential properties (functional dependencies, etc.) between predicates."""
+    myvars = tuple(string.ascii_uppercase[:settings.max_vars])
 
     pairs = set()
     for a1 in arities:
         xs = tuple(myvars[:a1])
-        xs_set = set(xs)
         for a2 in arities:
-            for ys in permutations(myvars,a2):
-                if not connected(xs, ys):
+            candidate_vars = myvars[:min(a1 + a2, settings.max_vars)]
+            for ys in permutations(candidate_vars, a2):
+                if not connected(xs, ys) or not uses_in_order(xs, ys):
                     continue
-                if not uses_in_order(xs, ys):
-                    continue
-                # pairs.append((xs, ys))
-                pairs.add(tuple(sorted([xs, ys])))
+                
+                # Canonicalize to handle symmetries
+                longer, shorter = sorted([xs, ys], key=len, reverse=True)
+                canon = canonicalise_vars(longer, shorter)
+                pairs.add((canon[0], canon[1]))
 
-    # print('pairs1')
-    # for x in pairs:
-    #     print(x)
+    props, cons = [], []
+    for xs, ys in sorted(pairs):
+        xs_set, ys_set = set(xs), set(ys)
+        left, right = ''.join(x.lower() for x in xs), ''.join(y.lower() for y in ys)
 
-    # print('len(pairs)',len(pairs))
+        t_left = format_tuple(f'T{x}' for x in xs)[1:-1]
+        t_right = format_tuple(f'T{y}' for y in ys)[1:-1]
+        atom_left = format_tuple(xs)[1:-1]
+        ys_masked = [y if y in xs_set else '_' for y in ys]
+        atom_right = format_tuple(ys_masked)[1:-1]
 
-    pairs = sorted(pairs)
-    pairs2 = set()
-    for xs, ys in pairs:
-        lookup = {}
-        def tmp(vs, next_var):
-            out = []
-            for v in vs:
-                if v not in lookup:
-                    lookup[v] = next_var
-                    next_var+=1
-                k = lookup[v]
-                out.append(chr(ord('A') + k))
-            return tuple(out), next_var
-        var_count = 0
-        out_xs, var_count = tmp(xs, var_count)
-        out_ys, var_count = tmp(ys, var_count)
-        # out_zs, var_count = tmp(zs, var_count)
-        pairs2.add((out_xs, out_ys))
-
-    # for x in set(pairs) - pairs2:
-        # print('bad',x)
-
-    # for x in pairs2:
-        # print('good',x)
-    # print('len(pairs2)',len(pairs2))
-
-    pairs3 = set()
-    for xs, ys in pairs2:
-        lookup = {}
-        def tmp(vs, next_var):
-            out = []
-            for v in vs:
-                if v not in lookup:
-                    lookup[v] = next_var
-                    next_var+=1
-                k = lookup[v]
-                out.append(chr(ord('A') + k))
-            return tuple(out), next_var
-        var_count = 0
-
-        zs = sorted([xs, ys], key=lambda x: len(x), reverse=True)
-        # xs1, ys1 = xs, ys
-        xs, ys = zs
-        out_xs, var_count = tmp(xs, var_count)
-        out_ys, var_count = tmp(ys, var_count)
-        # out_zs, var_count = tmp(zs, var_count)
-        k = (out_xs, out_ys)
-        pairs3.add(k)
-
-    # for x in pairs2 - pairs3:
-        # print('bad3', x)
-
-    # for x in pairs3:
-        # print('good', x)
-
-    # print('len(pairs3)',len(pairs3))
-
-    # print('implies_not2', len(pairs3))
-    props = []
-    cons = []
-    for xs, ys in pairs3:
-        xs_set = set(xs)
-        ys_set = set(ys)
-
-        left = ''.join(x.lower() for x in xs)
-        right = ''.join(y.lower() for y in ys)
-
-        t_left = ','.join(f'T{x}' for x in xs)
-        t_right = ','.join(f'T{y}' for y in ys)
-
-        zs = []
-        for y in ys:
-            if y not in xs_set:
-                zs.append('_')
-            else:
-                zs.append(y)
-
-        atom_left = ','.join(xs)
-        atom_right = ','.join(zs)
-
-        if len(xs) == 1:
-            t_left += ','
-            atom_left += ','
-        if len(ys) == 1:
-            t_right += ','
-            atom_right += ','
-
-        # # IMPLIES NOT
-        # key = f'not_{left}_implies_{right}'
+        # IMPLIES NOT: P(xs) => not Q(ys)
         key = f'not_{left}_{right}'
-
-
-
-        # if the vars are identical then remove symmetries
-        sym_con = ''
-        if xs == ys:
-            sym_con = 'P<Q,'
+        sym_con = 'P<Q,' if xs == ys else ''
 
         l1 = f'prop({key},(P,Q)):- {sym_con} body_pred(P,{len(xs)}), body_pred(Q,{len(ys)}), type(P,({t_left})), type(Q,({t_right})), holds(P,({atom_left})), not {key}_aux((P,Q)).'
         l2 = f'{key}_aux((P,Q)):- {sym_con} body_pred(P,{len(xs)}), body_pred(Q,{len(ys)}), type(P,({t_left})), type(Q,({t_right})), holds(P,({atom_left})), holds(Q,({atom_right})).'
         props.extend([l1, l2])
-
-
-        con1 = f':- prop({key},(P,Q)), body_literal(Rule,P,_,({atom_left})), body_literal(Rule,Q,_,({atom_right})).'
-        cons.append(con1)
+        cons.append(f':- prop({key},(P,Q)), body_literal(Rule,P,_,({atom_left})), body_literal(Rule,Q,_,({atom_right})).')
 
         if not ys_set.issubset(xs_set):
             continue
 
-        # IMPLIES
+        # IMPLIES: P(xs) => Q(ys) (only when ys variables are a subset of xs variables)
         key = f'{left}_{right}'
-
-
-        # if the vars are identical then remove symmetries
-        sym_con = ''
-        if xs == ys:
-            sym_con = 'P!=Q,'
+        sym_con = 'P!=Q,' if xs == ys else ''
 
         l1 = f'prop({key},(P,Q)):- {sym_con} body_pred(P,{len(xs)}), body_pred(Q,{len(ys)}), type(P,({t_left})), type(Q,({t_right})), holds(P,({atom_left})), holds(Q,({atom_right})), not {key}_aux((P,Q)).'
         l2 = f'{key}_aux((P,Q)):- {sym_con} body_pred(P,{len(xs)}), body_pred(Q,{len(ys)}), type(P,({t_left})), type(Q,({t_right})), holds(P,({atom_left})), not holds(Q,({atom_right})).'
         props.extend([l1, l2])
 
-
-        # rule_vars = xs_set | ys_set
-        rule_vars = ys_set
-        checker = ','.join(f'valid_var(Rule,{v})' for v in rule_vars)
-        con1 = f':- prop({key},(P,Q)), body_literal(Rule,P,_,({atom_left})), body_literal(Rule,Q,_,({atom_right})), {checker}.'
-        # con1 = f':- prop({key},(P,Q)), body_literal(Rule,P,_,({atom_left})), body_literal(Rule,Q,_,({atom_right})).'
-        # print(con1)
-        cons.append(con1)
-
-
+        checker = ','.join(f'valid_var(Rule,{v})' for v in ys_set)
+        cons.append(f':- prop({key},(P,Q)), body_literal(Rule,P,_,({atom_left})), body_literal(Rule,Q,_,({atom_right})), {checker}.')
 
     return props, cons
-
 def has_unordered_vars(xs, ys):
     lookup = {}
     def tmp(vs, next_var):
@@ -244,140 +158,6 @@ def has_unordered_vars(xs, ys):
     z1 = tuple(sorted([xs, ys]))
     z2 = tuple(sorted([out_xs, out_ys]))
     return z1 != z2
-
-# def build_props_new(settings, arities, tester=None):
-
-#     myvars = all_myvars[:settings.max_vars]
-
-#     arities = sorted(arities, reverse=True)
-
-#     pairs = set()
-#     for a1 in arities:
-#         xs = tuple(myvars[:a1])
-#         xs_set = set(xs)
-#         # print(xs)
-#         for a2 in arities:
-#             for ys in permutations(myvars,a2):
-#                 # print('\t',ys)
-#                 if not connected(xs, ys):
-#                     continue
-#                 if not uses_in_order(xs, ys):
-#                     continue
-#                 if has_unordered_vars(xs, ys):
-#                     continue
-#                 z = tuple(sorted([xs, ys]))
-#                 # print(z)
-#                 pairs.add(z)
-
-#     pairs3 = set()
-#     for xs, ys in pairs:
-#         lookup = {}
-#         def tmp(vs, next_var):
-#             out = []
-#             for v in vs:
-#                 if v not in lookup:
-#                     lookup[v] = next_var
-#                     next_var+=1
-#                 k = lookup[v]
-#                 out.append(chr(ord('A') + k))
-#             return tuple(out), next_var
-#         var_count = 0
-
-#         zs = sorted([xs, ys], key=lambda x: len(x), reverse=True)
-#         # xs1, ys1 = xs, ys
-#         xs, ys = zs
-#         out_xs, var_count = tmp(xs, var_count)
-#         out_ys, var_count = tmp(ys, var_count)
-#         # out_zs, var_count = tmp(zs, var_count)
-#         k = (out_xs, out_ys)
-#         pairs3.add(k)
-
-#     # for x in pairs - pairs3:
-#     #     print('bad3', x)
-
-#     # for x in pairs3:
-#     #     print('good', x)
-
-#     # print('len(pairs)',len(pairs))
-#     # print('len(pairs3)',len(pairs3))
-
-#     # print('implies_not2', len(pairs3))
-#     props = []
-#     cons = []
-#     for xs, ys in pairs3:
-#         xs_set = set(xs)
-#         ys_set = set(ys)
-
-#         left = ''.join(x.lower() for x in xs)
-#         right = ''.join(y.lower() for y in ys)
-
-#         t_left = ','.join(f'T{x}' for x in xs)
-#         t_right = ','.join(f'T{y}' for y in ys)
-
-#         zs = []
-#         for y in ys:
-#             if y not in xs_set:
-#                 zs.append('_')
-#             else:
-#                 zs.append(y)
-
-#         atom_left = ','.join(xs)
-#         atom_right = ','.join(zs)
-
-#         if len(xs) == 1:
-#             t_left += ','
-#             atom_left += ','
-#         if len(ys) == 1:
-#             t_right += ','
-#             atom_right += ','
-
-#         # # IMPLIES NOT
-#         # key = f'not_{left}_implies_{right}'
-#         key = f'not_{left}_{right}'
-
-
-
-#         # if the vars are identical then remove symmetries
-#         sym_con = ''
-#         if xs == ys:
-#             sym_con = 'P<Q,'
-
-#         l1 = f'prop({key},(P,Q)):- {sym_con} body_pred(P,{len(xs)}), body_pred(Q,{len(ys)}), type(P,({t_left})), type(Q,({t_right})), holds(P,({atom_left})), not {key}_aux((P,Q)).'
-#         l2 = f'{key}_aux((P,Q)):- {sym_con} body_pred(P,{len(xs)}), body_pred(Q,{len(ys)}), type(P,({t_left})), type(Q,({t_right})), holds(P,({atom_left})), holds(Q,({atom_right})).'
-#         props.extend([l1, l2])
-
-
-#         con1 = f':- prop({key},(P,Q)), body_literal(Rule,P,_,({atom_left})), body_literal(Rule,Q,_,({atom_right})).'
-#         cons.append(con1)
-
-#         if not ys_set.issubset(xs_set):
-#             continue
-
-#         # IMPLIES
-#         key = f'{left}_{right}'
-
-
-#         # if the vars are identical then remove symmetries
-#         sym_con = ''
-#         if xs == ys:
-#             sym_con = 'P!=Q,'
-
-#         l1 = f'prop({key},(P,Q)):- {sym_con} body_pred(P,{len(xs)}), body_pred(Q,{len(ys)}), type(P,({t_left})), type(Q,({t_right})), holds(P,({atom_left})), holds(Q,({atom_right})), not {key}_aux((P,Q)).'
-#         l2 = f'{key}_aux((P,Q)):- {sym_con} body_pred(P,{len(xs)}), body_pred(Q,{len(ys)}), type(P,({t_left})), type(Q,({t_right})), holds(P,({atom_left})), not holds(Q,({atom_right})).'
-#         props.extend([l1, l2])
-
-
-#         # rule_vars = xs_set | ys_set
-#         rule_vars = ys_set
-#         checker = ','.join(f'var_appears_more_than_twice(Rule,{v})' for v in rule_vars)
-#         con1 = f':- prop({key},(P,Q)), body_literal(Rule,P,_,({atom_left})), body_literal(Rule,Q,_,({atom_right})), {checker}.'
-#         # con1 = f':- prop({key},(P,Q)), body_literal(Rule,P,_,({atom_left})), body_literal(Rule,Q,_,({atom_right})).'
-#         # print(con1)
-#         cons.append(con1)
-
-
-
-#     return props, cons
 
 def rename_variables(xs, ys):
     lookup = {}
@@ -399,220 +179,6 @@ def rename_variables(xs, ys):
     xs = ''.join(x.lower() for x in xs)
     ys = ''.join(y.lower() for y in ys)
     return xs, ys
-
-
-def build_props2(settings, arities):
-    premise1 = []
-
-    arities = [x for x in arities if x < 3]
-    # arities = [x for x in arities if x < 2]
-
-    myvars = all_myvars[:settings.max_vars]
-
-    pairs = []
-    for a1 in arities:
-        xs = tuple(myvars[:a1])
-        # xs_set = set(xs)
-        for a2 in arities:
-            for ys in permutations(myvars,a2):
-                if not connected(xs, ys):
-                    continue
-                if not uses_in_order(xs, ys):
-                    continue
-                xs_ys = set(xs) | set(ys)
-                for a3 in arities:
-                    for zs in permutations(myvars,a3):
-                        if not connected(xs_ys, zs):
-                            continue
-                        if not uses_in_order(xs_ys, zs):
-                            continue
-                        # print(xs,ys,zs)
-                        # TODO: RENAME VARIABLES
-                        pairs.append((xs, ys, zs))
-
-    # for x in pairs:
-    #     print(x)
-    pairs2 = set()
-    for xs, ys, zs in pairs:
-        lookup = {}
-        def tmp(vs, next_var):
-            out = []
-            for v in vs:
-                if v not in lookup:
-                    lookup[v] = next_var
-                    next_var+=1
-                k = lookup[v]
-                out.append(chr(ord('A') + k))
-            return tuple(out), next_var
-        var_count = 0
-        xs, ys, zs = sorted([xs, ys, zs], key=lambda x: len(x), reverse=True)
-        out_xs, var_count = tmp(xs, var_count)
-        out_ys, var_count = tmp(ys, var_count)
-        out_zs, var_count = tmp(zs, var_count)
-        pairs2.add((out_xs, out_ys, out_zs))
-
-
-    seen = set()
-    seen_map = {}
-    pairs3 = set()
-
-
-
-    for xs, ys, zs in pairs2:
-        k = (frozenset((xs, ys)), zs)
-        if k in seen:
-            # print('match')
-            # print(xs, ys, zs)
-            # print(seen_map[k])
-            continue
-        seen.add(k)
-        seen_map[k] = (xs, ys, zs)
-
-        # if len(xs) > len(ys):
-        #     # print('1', xs, ys, zs)
-        #     continue
-        # else:
-        # print(xs, ys, zs)
-        pairs3.add((xs, ys, zs))
-
-    # for x in sorted(pairs3):
-        # print(x)
-    # print('p1',len(pairs))
-    # print('p2',len(pairs2))
-    # print('p3',len(pairs3))
-    pairs = pairs2
-    # for x in sorted(pairs2):
-    #     print(x)
-    # print(len(pairs))
-    # print(len(pairs2))
-    # for x in pairs:
-        # print(x)
-    props = []
-    cons = []
-    seen = set()
-    for xs, ys, zs in pairs:
-        xs_set = set(xs)
-        ys_set = set(ys)
-        zs_set = set(zs)
-
-        a1 = ''.join(x.lower() for x in xs)
-        a2 = ''.join(y.lower() for y in ys)
-        a3 = ''.join(z.lower() for z in zs)
-
-        t1 = ','.join(f'T{x}' for x in xs)
-        t2 = ','.join(f'T{y}' for y in ys)
-        t3 = ','.join(f'T{z}' for z in zs)
-
-
-        smoothed = []
-        xs_ys_set = xs_set | ys_set
-        for z in zs:
-            if z not in xs_ys_set:
-                smoothed.append('_')
-            else:
-                smoothed.append(z)
-
-        smoothed = ','.join(smoothed)
-        if len(zs) == 1:
-            smoothed += ','
-
-
-        atom1 = ','.join(xs)
-        atom2 = ','.join(ys)
-        atom3 = ','.join(zs)
-
-        if len(xs) == 1:
-            t1 += ','
-            atom1 += ','
-        if len(ys) == 1:
-            t2 += ','
-            atom2 += ','
-        if len(zs) == 1:
-            t3 += ','
-            atom3 += ','
-
-        # # IMPLIES NOT
-        key = f'not_{a1}_{a2}_{a3}'
-
-        if frozenset([a1, a2, a3]) in seen:
-            pass
-            # print('skip')
-            continue
-        seen.add(frozenset([a1, a2, a3]))
-
-
-
-        # # if the vars are identical then remove symmetries
-        sym_con = ''
-        if xs == ys:
-            sym_con += 'P<Q,'
-        if xs == zs:
-            sym_con += 'P<R,'
-        if ys == zs:
-            sym_con += 'Q<R,'
-
-
-
-        aux_key = f'{key}_subsumed'
-        aux1 = f'{aux_key}(P,Q,R):- body_pred(P,_), body_pred(Q,_), body_pred(R,_), prop(not_{a1}_{a2},(P,Q)).'
-        aux2 = f'{aux_key}(P,Q,R):- body_pred(P,_), body_pred(Q,_), body_pred(R,_), prop(not_{a1}_{a3},(P,R)).'
-        aux3 = f'{aux_key}(P,Q,R):- body_pred(P,_), body_pred(Q,_), body_pred(R,_), prop(not_{a2}_{a3},(Q,R)).'
-        props.extend([aux1, aux2, aux3])
-        # props.extend([aux2, aux3])
-
-        a1_, a2_ = rename_variables(a1, a2)
-        aux1 = f'{aux_key}(P,Q,R):- body_pred(P,_), body_pred(Q,_), body_pred(R,_), prop(not_{a1_}_{a2_},(P,Q)).'
-        a1_, a3_ = rename_variables(a1, a3)
-        aux2 = f'{aux_key}(P,Q,R):- body_pred(P,_), body_pred(Q,_), body_pred(R,_), prop(not_{a1_}_{a3_},(P,R)).'
-        a2_, a3_ = rename_variables(a2, a3)
-        aux3 = f'{aux_key}(P,Q,R):- body_pred(P,_), body_pred(Q,_), body_pred(R,_), prop(not_{a2_}_{a3_},(Q,R)).'
-        props.extend([aux1, aux2, aux3])
-
-
-        l1 = f'prop({key},(P,Q,R)):- {sym_con} body_pred(P,{len(xs)}), body_pred(Q,{len(ys)}), body_pred(R,{len(zs)}), type(P,({t1})), type(Q,({t2})), type(R,({t3})), holds(P,({atom1})), holds(Q,({atom2})), not {key}_aux((P,Q,R)), not {aux_key}(P,Q,R).'
-        l2 = f'{key}_aux((P,Q,R)):- {sym_con} body_pred(P,{len(xs)}), body_pred(Q,{len(ys)}), body_pred(R,{len(zs)}), type(P,({t1})), type(Q,({t2})), type(R,({t3})), holds(P,({atom1})), holds(Q,({atom2})), holds(R,({atom3})), not {aux_key}(P,Q,R).'
-
-        # l1 = f'prop({key},(P,Q,R)):- {sym_con} body_pred(P,{len(xs)}), body_pred(Q,{len(ys)}), body_pred(R,{len(zs)}), type(P,({t1})), type(Q,({t2})), type(R,({t3})), holds(P,({atom1})), holds(Q,({atom2})), not {key}_aux((P,Q,R)).'
-        # l2 = f'{key}_aux((P,Q,R)):- {sym_con} body_pred(P,{len(xs)}), body_pred(Q,{len(ys)}), body_pred(R,{len(zs)}), type(P,({t1})), type(Q,({t2})), type(R,({t3})), holds(P,({atom1})), holds(Q,({atom2})), holds(R,({atom3})).'
-
-        props.extend([l1, l2])
-
-        # print(l1)
-        # print(l2)
-
-        con1 = f':- prop({key},(P,Q,R)), body_literal(Rule,P,_,({atom1})), body_literal(Rule,Q,_,({atom2})), body_literal(Rule,R,_,({atom3})).'
-        cons.append(con1)
-
-        if not zs_set.issubset(xs_ys_set):
-            continue
-
-        # # IMPLIES
-        key = f'{a1}_{a2}_{a3}'
-
-
-        aux_key = f'{key}_subsumed'
-        aux1 = f'{aux_key}(P,Q,R):- body_pred(P,_), body_pred(Q,_), body_pred(R,_), prop({a1}_{a3},(P,R)).'
-        aux2 = f'{aux_key}(P,Q,R):- body_pred(P,_), body_pred(Q,_), body_pred(R,_), prop({a2}_{a3},(Q,R)).'
-        props.extend([aux1, aux2])
-
-
-        l1 = f'prop({key},(P,Q,R)):- {sym_con} body_pred(P,{len(xs)}), body_pred(Q,{len(ys)}), body_pred(R,{len(zs)}), type(P,({t1})), type(Q,({t2})), type(R,({t3})), holds(P,({atom1})), holds(Q,({atom2})), not {key}_aux((P,Q,R)), not {aux_key}(P,Q,R).'
-        l2 = f'{key}_aux((P,Q,R)):- {sym_con} body_pred(P,{len(xs)}), body_pred(Q,{len(ys)}), body_pred(R,{len(zs)}), type(P,({t1})), type(Q,({t2})), type(R,({t3})), holds(P,({atom1})), holds(Q,({atom2})), not holds(R,({smoothed})).'
-
-
-        props.extend([l1, l2])
-
-
-        # rule_vars = xs_set | ys_set
-        rule_vars = zs_set
-        checker = ','.join(f'valid_var(Rule,{v})' for v in rule_vars)
-        con1 = f':- prop({key},(P,Q,R)), body_literal(Rule,P,_,({atom1})), body_literal(Rule,Q,_,({atom2})), body_literal(Rule,R,_,({atom3})), {checker}.'
-        # # con1 = f':- prop({key},(P,Q)), body_literal(Rule,P,_,({atom_left})), body_literal(Rule,Q,_,({atom_right})).'
-        # # print(con1)
-        cons.append(con1)
-
-    props = sorted(list(set(props)))
-    return props, cons
 
 def arg_to_symbol(arg):
     if isinstance(arg, tuple):
@@ -667,6 +233,7 @@ def deduce_bk_cons(settings, tester):
     #             encoding.append(f'var_pos({x}, {tuple(xs)}, {i}).')
 
     # type_encoding = set()
+    
     if settings.head_types:
         types = tuple(settings.head_types)
         prog.append(f'type({settings.head_literal[0]},{types}).')
@@ -685,14 +252,7 @@ def deduce_bk_cons(settings, tester):
     # cons = pkg_resources.resource_string(__name__, "lp/cons.pl").decode()
     bk = bk.replace('\\+','not')
 
-    new_props1, new_cons1 = build_props(settings, arities, tester)
-    new_props2, new_cons2 = build_props2(settings, arities)
-
-    new_props = new_props1 + new_props2
-    new_cons = new_cons1 + new_cons2
-
-    # print('\n'.join(new_cons))
-
+    new_props, new_cons = build_props(settings, arities)
     new_props = '\n'.join(new_props)
     encoding = [prog, bk, TIDY_OUTPUT, new_props]
 
